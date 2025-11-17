@@ -25,7 +25,13 @@ SECRET_KEY = 'django-insecure-qxbn^$_7-z+8^*z$-&4v7hbebf7u6b5p47=6=fs1i&tna7b81&
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = [
+    "api.raioncore.com",
+    "calificacion-tributaria-nuam-production.up.railway.app",
+    "localhost",
+    "127.0.0.1",
+]
+
 
 
 # Application definition
