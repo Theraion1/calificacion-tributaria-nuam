@@ -33,6 +33,9 @@ if allowed_hosts_env:
 else:
     ALLOWED_HOSTS = ["localhost", "127.0.0.1"]
 
+CSRF_TRUSTED_ORIGINS = [
+    "https://api.raioncore.com",
+]
 
 # =========================
 # Apps
