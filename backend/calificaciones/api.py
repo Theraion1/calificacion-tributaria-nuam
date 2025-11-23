@@ -17,72 +17,96 @@ from .serializers import (
 )
 
 
-# PERMISOS ===============================
+# =========================
+# Permisos genéricos
+# =========================
 
 class IsStaffOrReadOnly(permissions.BasePermission):
+    """
+    Solo staff/admin pueden escribir.
+    Cualquier usuario autenticado puede leer (GET, HEAD, OPTIONS).
+    """
+
     def has_permission(self, request, view):
-        # Lectura para todos los autenticados
         if request.method in permissions.SAFE_METHODS:
             return request.user.is_authenticated
-        # Escritura solo staff / admin
         return request.user.is_staff or request.user.is_superuser
 
 
 class CalificacionPermission(permissions.BasePermission):
+    """
+    Reglas:
+    - Todos los autenticados pueden leer (filtramos en get_queryset).
+    - corredor: puede crear/editar SOLO de su corredor.
+    - auditor: solo lectura.
+    - admin/staff: puede todo.
+    - SOLO admin/staff pueden borrar (DELETE).
+    """
+
     def has_permission(self, request, view):
         user = request.user
-        if not user.is_authenticated:
+        if not user or not user.is_authenticated:
             return False
 
-        # GET permitido para todos los autenticados
+        # Lectura permitida para todos los autenticados
         if request.method in permissions.SAFE_METHODS:
             return True
 
-        # Admin o staff → permitido
+        # Escritura:
         if user.is_superuser or user.is_staff:
             return True
 
         perfil = getattr(user, "perfil", None)
 
-        # Corredor → puede crear/editar
+        # corredores pueden crear/editar, auditor no
         if perfil and perfil.rol == "corredor":
             return True
 
-        # Auditor → solo lectura
         return False
 
     def has_object_permission(self, request, view, obj):
         user = request.user
 
-        # lectura
+        # Lectura
         if request.method in permissions.SAFE_METHODS:
             if user.is_superuser or user.is_staff:
                 return True
+
             perfil = getattr(user, "perfil", None)
             if not perfil:
                 return False
+
             if perfil.rol == "corredor":
+                # corredor solo ve sus propias calificaciones
                 return obj.corredor_id == perfil.corredor_id
+
             if perfil.rol == "auditor":
+                # auditor puede ver todas
                 return True
+
             return False
 
-        # DELETE → solo admin o staff
+        # DELETE: solo admin/staff
         if request.method == "DELETE":
             return user.is_superuser or user.is_staff
 
-        # UPDATE → corredor solo su propio corredor
+        # UPDATE / PARTIAL_UPDATE:
+        if user.is_superuser or user.is_staff:
+            return True
+
         perfil = getattr(user, "perfil", None)
         if perfil and perfil.rol == "corredor":
             return obj.corredor_id == perfil.corredor_id
 
-        return user.is_superuser or user.is_staff
+        return False
 
 
-# VIEWSETS ===============================
+# =========================
+# ViewSets
+# =========================
 
 class PaisViewSet(viewsets.ModelViewSet):
-    queryset = Pais.objects.all()
+    queryset = Pais.objects.all().order_by("nombre")
     serializer_class = PaisSerializer
     permission_classes = [IsStaffOrReadOnly]
 
@@ -94,6 +118,8 @@ class CorredorViewSet(viewsets.ModelViewSet):
 
 
 class CalificacionTributariaViewSet(viewsets.ModelViewSet):
+    # IMPORTANTE: queryset definido para que el router pueda obtener el basename
+    queryset = CalificacionTributaria.objects.all()
     serializer_class = CalificacionTributariaSerializer
     permission_classes = [CalificacionPermission]
 
@@ -101,6 +127,10 @@ class CalificacionTributariaViewSet(viewsets.ModelViewSet):
         user = self.request.user
         qs = CalificacionTributaria.objects.all()
 
+        if not user.is_authenticated:
+            return qs.none()
+
+        # Admin / staff ven todo
         if user.is_superuser or user.is_staff:
             return qs
 
@@ -108,12 +138,12 @@ class CalificacionTributariaViewSet(viewsets.ModelViewSet):
         if not perfil:
             return qs.none()
 
-        # corredor ve solo lo suyo
         if perfil.rol == "corredor":
+            # corredor solo ve su propio corredor
             return qs.filter(corredor=perfil.corredor)
 
-        # auditor ve todo
         if perfil.rol == "auditor":
+            # auditor puede ver todas
             return qs
 
         return qs.none()
@@ -121,14 +151,16 @@ class CalificacionTributariaViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         user = self.request.user
 
+        # Admin/staff pueden crear para cualquier corredor
         if user.is_superuser or user.is_staff:
-            serializer.save(creado_por=user)
+            serializer.save(creado_por=user, actualizado_por=user)
             return
 
         perfil = getattr(user, "perfil", None)
         if not perfil or perfil.rol != "corredor":
-            raise PermissionDenied("Solo los corredores pueden crear calificaciones.")
+            raise PermissionDenied("Solo usuarios con rol 'corredor' pueden crear calificaciones.")
 
+        # Forzamos a que la calificación quede asociada a SU corredor
         serializer.save(
             corredor=perfil.corredor,
             creado_por=user,
@@ -144,8 +176,9 @@ class CalificacionTributariaViewSet(viewsets.ModelViewSet):
 
         perfil = getattr(user, "perfil", None)
         if not perfil or perfil.rol != "corredor":
-            raise PermissionDenied("Solo los corredores pueden editar calificaciones.")
+            raise PermissionDenied("Solo usuarios con rol 'corredor' pueden editar calificaciones.")
 
+        # Igual que en create: no dejamos que cambie el corredor
         serializer.save(
             corredor=perfil.corredor,
             actualizado_por=user,
@@ -159,12 +192,14 @@ class CalificacionTributariaViewSet(viewsets.ModelViewSet):
 
 
 class ArchivoCargaViewSet(viewsets.ModelViewSet):
-    queryset = ArchivoCarga.objects.all()
+    queryset = ArchivoCarga.objects.select_related("corredor").all()
     serializer_class = ArchivoCargaSerializer
     permission_classes = [IsStaffOrReadOnly]
 
 
 class HistorialCalificacionViewSet(viewsets.ReadOnlyModelViewSet):
-    queryset = HistorialCalificacion.objects.all()
+    queryset = HistorialCalificacion.objects.select_related(
+        "calificacion", "usuario"
+    ).all()
     serializer_class = HistorialCalificacionSerializer
     permission_classes = [permissions.IsAuthenticated]
