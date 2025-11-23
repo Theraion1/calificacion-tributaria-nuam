@@ -8,7 +8,10 @@ import pymysql
 
 pymysql.install_as_MySQLdb()
 
-# Build paths inside the project like this: BASE_DIR / 'subdir'.
+# =========================
+# Paths
+# =========================
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 
@@ -16,17 +19,13 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # Seguridad / entorno
 # =========================
 
-# En producción, usa la variable DJANGO_SECRET_KEY (ya la tienes en Railway)
 SECRET_KEY = os.getenv(
     "DJANGO_SECRET_KEY",
     "django-insecure-dev-key-no-usar-en-produccion",
 )
 
-# DJANGO_DEBUG = "True" / "False" en Railway
 DEBUG = os.getenv("DJANGO_DEBUG", "True") == "True"
 
-# DJANGO_ALLOWED_HOSTS en Railway separado por comas:
-# ej: "calificacion-tributaria-nuam-production.up.railway.app,localhost,127.0.0.1"
 allowed_hosts_env = os.getenv("DJANGO_ALLOWED_HOSTS", "")
 if allowed_hosts_env:
     ALLOWED_HOSTS = [h.strip() for h in allowed_hosts_env.split(",") if h.strip()]
@@ -36,6 +35,7 @@ else:
 CSRF_TRUSTED_ORIGINS = [
     "https://api.raioncore.com",
 ]
+
 
 # =========================
 # Apps
@@ -48,9 +48,18 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+
+    # Terceros
     "rest_framework",
+
+    # Apps del proyecto
     "calificaciones",
 ]
+
+
+# =========================
+# Middleware
+# =========================
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
@@ -65,6 +74,11 @@ MIDDLEWARE = [
 
 
 ROOT_URLCONF = "nuam_backend.urls"
+
+
+# =========================
+# Templates
+# =========================
 
 TEMPLATES = [
     {
@@ -87,8 +101,6 @@ WSGI_APPLICATION = "nuam_backend.wsgi.application"
 # =========================
 # Base de datos
 # =========================
-# En local: usa los defaults (nuam_calificaciones, 127.0.0.1)
-# En Railway: usa las variables MYSQLDATABASE, MYSQLUSER, etc. que ya creaste.
 
 DATABASES = {
     "default": {
@@ -105,38 +117,24 @@ DATABASES = {
 }
 
 
-
-
 # =========================
 # Passwords
 # =========================
 
 AUTH_PASSWORD_VALIDATORS = [
-    {
-        "NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator",
-    },
-    {
-        "NAME": "django.contrib.auth.password_validation.MinimumLengthValidator",
-    },
-    {
-        "NAME": "django.contrib.auth.password_validation.CommonPasswordValidator",
-    },
-    {
-        "NAME": "django.contrib.auth.password_validation.NumericPasswordValidator",
-    },
+    {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
+    {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator"},
+    {"NAME": "django.contrib.auth.password_validation.CommonPasswordValidator"},
+    {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"},
 ]
 
 
 # =========================
-# Internationalization
+# Internacionalización
 # =========================
 
 LANGUAGE_CODE = "en-us"
-
-# Si quieres, puedes cambiar a tu zona:
-# TIME_ZONE = "America/Santiago"
 TIME_ZONE = "UTC"
-
 USE_I18N = True
 USE_TZ = True
 
@@ -155,6 +153,21 @@ STORAGES = {
     "staticfiles": {
         "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
     },
+}
+
+
+# =========================
+# Django REST Framework
+# =========================
+
+REST_FRAMEWORK = {
+    "DEFAULT_PERMISSION_CLASSES": [
+        "rest_framework.permissions.IsAuthenticated",
+    ],
+    "DEFAULT_AUTHENTICATION_CLASSES": [
+        "rest_framework.authentication.SessionAuthentication",
+        "rest_framework.authentication.BasicAuthentication",
+    ],
 }
 
 
