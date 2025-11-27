@@ -26,6 +26,13 @@ from calificaciones.api import (
     HistorialCalificacionViewSet,
 )
 
+from calificaciones.views import (
+    RegistroCorredorView,
+    LoginView,
+    WhoAmIView,
+    CambiarRolView,
+)
+
 router = DefaultRouter()
 router.register(r"paises", PaisViewSet)
 router.register(r"corredores", CorredorViewSet)
@@ -35,6 +42,17 @@ router.register(r"historial", HistorialCalificacionViewSet, basename="historial"
 
 urlpatterns = [
     path("admin/", admin.site.urls),
+
+    path("api/registro-corredor/", RegistroCorredorView.as_view(), name="registro-corredor"),
+    path("api/login/", LoginView.as_view(), name="login"),
+    path("api/whoami/", WhoAmIView.as_view(), name="whoami"),
+    path(
+        "api/usuarios/<int:usuario_id>/cambiar-rol/",
+        CambiarRolView.as_view(),
+        name="cambiar-rol",
+    ),
+
     path("api/", include(router.urls)),
 ]
+
 
