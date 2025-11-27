@@ -21,13 +21,15 @@ class RegistroCorredorView(APIView):
 
     def post(self, request):
         serializer = RegistroCorredorSerializer(data=request.data)
-        if serializer.is_valid():
-            data = serializer.save()
-            user = User.objects.get(id=data["user_id"])
-            token, _ = Token.objects.get_or_create(user=user)
-            data["token"] = token.key
-            return Response(data, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        serializer.is_valid(raise_exception=True)
+
+        data = serializer.save()  # devuelve user_id, perfil_id, corredor_id, etc.
+        user = User.objects.get(id=data["user_id"])
+
+        token, _ = Token.objects.get_or_create(user=user)
+        data["token"] = token.key
+
+        return Response(data, status=status.HTTP_201_CREATED)
 
 
 class LoginView(APIView):

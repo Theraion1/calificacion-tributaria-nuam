@@ -43,47 +43,86 @@ class HistorialCalificacionSerializer(serializers.ModelSerializer):
 
 
 class RegistroCorredorSerializer(serializers.Serializer):
+    # Datos del usuario
     username = serializers.CharField(max_length=150)
     email = serializers.EmailField()
     password = serializers.CharField(write_only=True, min_length=8)
-    nombre_corredor = serializers.CharField(max_length=150)
-    codigo_interno = serializers.CharField(max_length=50)
-    pais_id = serializers.IntegerField()
     nombre_usuario = serializers.CharField(max_length=150)
 
+    # OPCIÓN 1: usar corredor existente
+    corredor_id = serializers.IntegerField(required=False)
+
+    # OPCIÓN 2: crear corredor nuevo
+    nombre_corredor = serializers.CharField(max_length=150, required=False)
+    codigo_interno = serializers.CharField(max_length=50, required=False)
+    pais_id = serializers.IntegerField(required=False)
+
     def validate(self, attrs):
-        if User.objects.filter(username=attrs["username"]).exists():
+        username = attrs.get("username")
+        corredor_id = attrs.get("corredor_id")
+        codigo_interno = attrs.get("codigo_interno")
+        nombre_corredor = attrs.get("nombre_corredor")
+        pais_id = attrs.get("pais_id")
+
+        # Validar username único
+        if User.objects.filter(username=username).exists():
             raise serializers.ValidationError("Ese nombre de usuario ya existe.")
-        if Corredor.objects.filter(codigo_interno=attrs["codigo_interno"]).exists():
-            raise serializers.ValidationError("Ese código interno de corredor ya existe.")
+
+        # Si viene corredor_id → usar corredor existente
+        if corredor_id:
+            if not Corredor.objects.filter(id=corredor_id).exists():
+                raise serializers.ValidationError(
+                    {"corredor_id": "No existe un corredor con ese ID."}
+                )
+        else:
+            # Si NO viene corredor_id → obligamos a mandar datos del corredor nuevo
+            if not (nombre_corredor and codigo_interno and pais_id):
+                raise serializers.ValidationError(
+                    "Debes enviar 'corredor_id' o bien "
+                    "'nombre_corredor', 'codigo_interno' y 'pais_id' para crear un corredor nuevo."
+                )
+
+            # Validar código interno único SOLO cuando se crea corredor
+            if Corredor.objects.filter(codigo_interno=codigo_interno).exists():
+                raise serializers.ValidationError(
+                    "Ese código interno de corredor ya existe."
+                )
+
         return attrs
 
     def create(self, validated_data):
         username = validated_data["username"]
         email = validated_data["email"]
         password = validated_data["password"]
-        nombre_corredor = validated_data["nombre_corredor"]
-        codigo_interno = validated_data["codigo_interno"]
-        pais_id = validated_data["pais_id"]
         nombre_usuario = validated_data["nombre_usuario"]
 
+        corredor_id = validated_data.get("corredor_id")
+        nombre_corredor = validated_data.get("nombre_corredor")
+        codigo_interno = validated_data.get("codigo_interno")
+        pais_id = validated_data.get("pais_id")
+
+        # 1) Crear usuario Django
         user = User.objects.create_user(
             username=username,
             email=email,
             password=password,
         )
 
-        pais = Pais.objects.get(id=pais_id)
+        # 2) Obtener o crear corredor
+        if corredor_id:
+            corredor = Corredor.objects.get(id=corredor_id)
+        else:
+            pais = Pais.objects.get(id=pais_id)
+            corredor = Corredor.objects.create(
+                nombre=nombre_corredor,
+                codigo_interno=codigo_interno,
+                pais=pais,
+            )
 
-        corredor = Corredor.objects.create(
-            nombre=nombre_corredor,
-            codigo_interno=codigo_interno,
-            pais=pais,
-        )
-
+        # 3) Crear perfil
         perfil = UsuarioPerfil.objects.create(
             user=user,
-            nombre=nombre_usuario,
+            nombre=nombre_usuario,   # campo 'nombre' de tu modelo
             rol="corredor",
             corredor=corredor,
         )
