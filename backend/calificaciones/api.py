@@ -1,5 +1,10 @@
-from rest_framework import viewsets, permissions
+from rest_framework import viewsets, permissions, status
+from rest_framework.decorators import action
+from rest_framework.parsers import MultiPartParser, FormParser
+from rest_framework.response import Response
 from rest_framework.exceptions import PermissionDenied
+
+from django.core.files.storage import default_storage
 
 from .models import (
     Pais,
@@ -15,98 +20,84 @@ from .serializers import (
     ArchivoCargaSerializer,
     HistorialCalificacionSerializer,
 )
+from .services import procesar_archivo_carga
 
-
-# =========================
-# Permisos genéricos
-# =========================
 
 class IsStaffOrReadOnly(permissions.BasePermission):
-    """
-    Solo staff/admin pueden escribir.
-    Cualquier usuario autenticado puede leer (GET, HEAD, OPTIONS).
-    """
-
     def has_permission(self, request, view):
         if request.method in permissions.SAFE_METHODS:
-            return request.user.is_authenticated
-        return request.user.is_staff or request.user.is_superuser
+            return True
+        return request.user and request.user.is_staff
 
 
 class CalificacionPermission(permissions.BasePermission):
-    """
-    Reglas:
-    - Todos los autenticados pueden leer (filtramos en get_queryset).
-    - corredor: puede crear/editar SOLO de su corredor.
-    - auditor: solo lectura.
-    - admin/staff: puede todo.
-    - SOLO admin/staff pueden borrar (DELETE).
-    """
-
     def has_permission(self, request, view):
         user = request.user
         if not user or not user.is_authenticated:
             return False
-
-        # Lectura permitida para todos los autenticados
         if request.method in permissions.SAFE_METHODS:
             return True
-
-        # Escritura:
         if user.is_superuser or user.is_staff:
             return True
-
         perfil = getattr(user, "perfil", None)
-
-        # corredores pueden crear/editar, auditor no
-        if perfil and perfil.rol == "corredor":
+        if perfil and perfil.rol in ["corredor", "admin"]:
             return True
-
         return False
 
     def has_object_permission(self, request, view, obj):
         user = request.user
-
-        # Lectura
         if request.method in permissions.SAFE_METHODS:
             if user.is_superuser or user.is_staff:
                 return True
-
             perfil = getattr(user, "perfil", None)
-            if not perfil:
-                return False
-
-            if perfil.rol == "corredor":
-                # corredor solo ve sus propias calificaciones
+            if perfil and perfil.rol == "corredor":
                 return obj.corredor_id == perfil.corredor_id
-
-            if perfil.rol == "auditor":
-                # auditor puede ver todas
+            if perfil and perfil.rol == "auditor":
                 return True
-
             return False
-
-        # DELETE: solo admin/staff
-        if request.method == "DELETE":
-            return user.is_superuser or user.is_staff
-
-        # UPDATE / PARTIAL_UPDATE:
         if user.is_superuser or user.is_staff:
             return True
-
         perfil = getattr(user, "perfil", None)
         if perfil and perfil.rol == "corredor":
             return obj.corredor_id == perfil.corredor_id
-
         return False
 
 
-# =========================
-# ViewSets
-# =========================
+class ArchivoCargaPermission(permissions.BasePermission):
+    def has_permission(self, request, view):
+        user = request.user
+        if not user or not user.is_authenticated:
+            return False
+        if request.method in permissions.SAFE_METHODS:
+            return True
+        if user.is_superuser or user.is_staff:
+            return True
+        perfil = getattr(user, "perfil", None)
+        if perfil and perfil.rol == "corredor":
+            return True
+        return False
+
+    def has_object_permission(self, request, view, obj):
+        user = request.user
+        if request.method in permissions.SAFE_METHODS:
+            if user.is_superuser or user.is_staff:
+                return True
+            perfil = getattr(user, "perfil", None)
+            if perfil and perfil.rol == "corredor":
+                return obj.corredor_id == perfil.corredor_id
+            if perfil and perfil.rol == "auditor":
+                return True
+            return False
+        if user.is_superuser or user.is_staff:
+            return True
+        perfil = getattr(user, "perfil", None)
+        if perfil and perfil.rol == "corredor":
+            return obj.corredor_id == perfil.corredor_id
+        return False
+
 
 class PaisViewSet(viewsets.ModelViewSet):
-    queryset = Pais.objects.all().order_by("nombre")
+    queryset = Pais.objects.all()
     serializer_class = PaisSerializer
     permission_classes = [IsStaffOrReadOnly]
 
@@ -118,49 +109,34 @@ class CorredorViewSet(viewsets.ModelViewSet):
 
 
 class CalificacionTributariaViewSet(viewsets.ModelViewSet):
-    # IMPORTANTE: queryset definido para que el router pueda obtener el basename
-    queryset = CalificacionTributaria.objects.all()
+    queryset = CalificacionTributaria.objects.select_related("corredor", "pais").all()
     serializer_class = CalificacionTributariaSerializer
     permission_classes = [CalificacionPermission]
 
     def get_queryset(self):
         user = self.request.user
-        qs = CalificacionTributaria.objects.all()
-
+        qs = CalificacionTributaria.objects.select_related("corredor", "pais").all()
         if not user.is_authenticated:
             return qs.none()
-
-        # Admin / staff ven todo
         if user.is_superuser or user.is_staff:
             return qs
-
         perfil = getattr(user, "perfil", None)
         if not perfil:
             return qs.none()
-
         if perfil.rol == "corredor":
-            # corredor solo ve su propio corredor
             return qs.filter(corredor=perfil.corredor)
-
         if perfil.rol == "auditor":
-            # auditor puede ver todas
             return qs
-
         return qs.none()
 
     def perform_create(self, serializer):
         user = self.request.user
-
-        # Admin/staff pueden crear para cualquier corredor
         if user.is_superuser or user.is_staff:
             serializer.save(creado_por=user, actualizado_por=user)
             return
-
         perfil = getattr(user, "perfil", None)
         if not perfil or perfil.rol != "corredor":
-            raise PermissionDenied("Solo usuarios con rol 'corredor' pueden crear calificaciones.")
-
-        # Forzamos a que la calificación quede asociada a SU corredor
+            raise PermissionDenied("Solo corredores pueden crear calificaciones.")
         serializer.save(
             corredor=perfil.corredor,
             creado_por=user,
@@ -169,32 +145,99 @@ class CalificacionTributariaViewSet(viewsets.ModelViewSet):
 
     def perform_update(self, serializer):
         user = self.request.user
-
-        if user.is_superuser or user.is_staff:
-            serializer.save(actualizado_por=user)
-            return
-
-        perfil = getattr(user, "perfil", None)
-        if not perfil or perfil.rol != "corredor":
-            raise PermissionDenied("Solo usuarios con rol 'corredor' pueden editar calificaciones.")
-
-        # Igual que en create: no dejamos que cambie el corredor
-        serializer.save(
-            corredor=perfil.corredor,
-            actualizado_por=user,
-        )
-
-    def perform_destroy(self, instance):
-        user = self.request.user
-        if not (user.is_superuser or user.is_staff):
-            raise PermissionDenied("Solo administradores pueden eliminar calificaciones.")
-        instance.delete()
+        serializer.save(actualizado_por=user)
 
 
 class ArchivoCargaViewSet(viewsets.ModelViewSet):
     queryset = ArchivoCarga.objects.select_related("corredor").all()
     serializer_class = ArchivoCargaSerializer
-    permission_classes = [IsStaffOrReadOnly]
+    permission_classes = [ArchivoCargaPermission]
+    parser_classes = [MultiPartParser, FormParser]
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = ArchivoCarga.objects.select_related("corredor").all()
+        if not user.is_authenticated:
+            return qs.none()
+        if user.is_superuser or user.is_staff:
+            return qs
+        perfil = getattr(user, "perfil", None)
+        if not perfil:
+            return qs.none()
+        if perfil.rol == "corredor":
+            return qs.filter(corredor=perfil.corredor)
+        if perfil.rol == "auditor":
+            return qs
+        return qs.none()
+
+    def perform_create(self, serializer):
+        user = self.request.user
+        if user.is_superuser or user.is_staff:
+            serializer.save(submitted_by=user)
+            return
+        perfil = getattr(user, "perfil", None)
+        if not perfil or perfil.rol != "corredor":
+            raise PermissionDenied("Solo corredores pueden crear cargas.")
+        serializer.save(
+            corredor=perfil.corredor,
+            submitted_by=user,
+        )
+
+    @action(detail=False, methods=["post"], url_path="subir")
+    def subir_archivo(self, request):
+        user = request.user
+        if not user.is_authenticated:
+            raise PermissionDenied("Autenticación requerida.")
+        perfil = getattr(user, "perfil", None)
+        if not (user.is_superuser or user.is_staff) and not (perfil and perfil.rol == "corredor"):
+            raise PermissionDenied("No autorizado.")
+
+        upload = request.FILES.get("archivo")
+        if not upload:
+            return Response({"detail": "Debe adjuntar archivo."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if user.is_superuser or user.is_staff:
+            corredor_id = request.data.get("corredor")
+            if not corredor_id:
+                return Response({"detail": "Debe indicar corredor."}, status=status.HTTP_400_BAD_REQUEST)
+            try:
+                corredor = Corredor.objects.get(pk=corredor_id)
+            except Corredor.DoesNotExist:
+                return Response({"detail": "Corredor no encontrado."}, status=status.HTTP_400_BAD_REQUEST)
+        else:
+            corredor = perfil.corredor
+
+        filename = default_storage.save(f"cargas/{upload.name}", upload)
+        ruta = default_storage.path(filename)
+
+        archivo_carga = ArchivoCarga.objects.create(
+            corredor=corredor,
+            nombre_original=upload.name,
+            ruta_almacenamiento=ruta,
+            tipo_mime=upload.content_type or "",
+            tamano_bytes=upload.size,
+            estado_proceso="pendiente",
+            submitted_by=user,
+        )
+
+        procesar_archivo_carga(archivo_carga, upload)
+
+        serializer = self.get_serializer(archivo_carga)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=["get"], url_path="resumen")
+    def resumen(self, request, pk=None):
+        job = self.get_object()
+        return Response(
+            {
+                "estado_proceso": job.estado_proceso,
+                "resumen_proceso": job.resumen_proceso,
+                "errores_por_fila": job.errores_por_fila,
+                "started_at": job.started_at,
+                "finished_at": job.finished_at,
+                "tiempo_procesamiento_seg": job.tiempo_procesamiento_seg,
+            }
+        )
 
 
 class HistorialCalificacionViewSet(viewsets.ReadOnlyModelViewSet):
