@@ -220,7 +220,8 @@ class ArchivoCargaViewSet(viewsets.ModelViewSet):
             submitted_by=user,
         )
 
-        procesar_archivo_carga(archivo_carga, upload)
+        with default_storage.open(filename, "rb") as f:
+            procesar_archivo_carga(archivo_carga, f)
 
         serializer = self.get_serializer(archivo_carga)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
