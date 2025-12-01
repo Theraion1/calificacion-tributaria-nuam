@@ -11,11 +11,17 @@ from django.utils import timezone
 from .models import ArchivoCarga, CalificacionTributaria, Pais
 
 
-class DetectorPaisTributario:
+class DetectorPaisTributario(object):
+    """
+    Detección simple de país a partir de los datos de una fila.
+    Usa patrones de identificadores (RUT/NIT/RUC) y palabras clave.
+    Devuelve un código ISO3 (CHL, COL, PER) y un score de confianza.
+    """
+
     PATRONES = {
         "CHL": {
             "regex": [
-                r"\d{1,2}\.\d{3}\.\d{3}-[0-9kK]"
+                r"\d{1,2}\.\d{3}\.\d{3}-[0-9kK]",  # RUT Chile 12.345.678-9
             ],
             "keywords": ["CHILE", "SANTIAGO", "RUT"],
             "score_regex": 0.7,
@@ -23,7 +29,7 @@ class DetectorPaisTributario:
         },
         "COL": {
             "regex": [
-                r"\d{3}\.\d{3}\.\d{3}-\d"
+                r"\d{3}\.\d{3}\.\d{3}-\d",  # NIT 123.456.789-0
             ],
             "keywords": ["COLOMBIA", "BOGOTA", "NIT"],
             "score_regex": 0.7,
@@ -31,7 +37,7 @@ class DetectorPaisTributario:
         },
         "PER": {
             "regex": [
-                r"2\d{10}"
+                r"2\d{10}",  # RUC Perú, ejemplo simple
             ],
             "keywords": ["PERU", "LIMA", "RUC"],
             "score_regex": 0.7,
@@ -40,6 +46,10 @@ class DetectorPaisTributario:
     }
 
     def detectar(self, row):
+        """
+        Recibe una fila (dict) y devuelve (codigo_iso3, score).
+        Si no detecta nada, devuelve (None, 0.0).
+        """
         textos = []
         for v in row.values():
             if v is None:
@@ -70,6 +80,10 @@ class DetectorPaisTributario:
 
 
 def _to_decimal(value):
+    """
+    Convierte distintos formatos a Decimal.
+    Acepta: "", None -> None; "0.1", "0,1", 0.1, 1, etc.
+    """
     if value is None:
         return None
 
@@ -89,10 +103,14 @@ def _to_decimal(value):
     try:
         return Decimal(s)
     except Exception:
-        raise ValidationError(f"Valor decimal inválido: {value!r}")
+        raise ValidationError("Valor decimal inválido: %r" % value)
 
 
 def _normalizar_header(nombre):
+    """
+    Normaliza el texto del encabezado a nombres de campo
+    que usamos en la carga masiva.
+    """
     base = nombre.strip().lower()
     base = re.sub(r"\s+", " ", base)
     base = (
@@ -114,13 +132,18 @@ def _normalizar_header(nombre):
 
     m = re.search(r"factor[_\s]*(\d+)", base)
     if m:
-        return f"factor_{m.group(1)}"
+        return "factor_%s" % m.group(1)
 
     base = re.sub(r"[^a-z0-9]+", "_", base)
-    return base.strip("_")
+    base = base.strip("_")
+    return base
 
 
 def _normalizar_row_claves(row):
+    """
+    Toma un dict con claves cualquiera (nombres de columnas originales)
+    y devuelve un dict con claves normalizadas usando _normalizar_header.
+    """
     nuevo = {}
     for k, v in row.items():
         if k is None:
@@ -131,6 +154,11 @@ def _normalizar_row_claves(row):
 
 
 def _parse_pdf_text_to_rows(file_obj):
+    """
+    Lee el PDF como texto y arma filas en base a líneas con '|'.
+    Busca específicamente la fila que contiene 'identificador_cliente'
+    para usarla como encabezado real.
+    """
     lineas_tabla = []
 
     with pdfplumber.open(file_obj) as pdf:
@@ -138,7 +166,9 @@ def _parse_pdf_text_to_rows(file_obj):
             texto = page.extract_text() or ""
             for raw in texto.splitlines():
                 linea = raw.strip()
-                if linea and "|" in linea:
+                if not linea:
+                    continue
+                if "|" in linea:
                     lineas_tabla.append(linea)
 
     if not lineas_tabla:
@@ -165,7 +195,7 @@ def _parse_pdf_text_to_rows(file_obj):
 
     filas = []
 
-    for linea in lineas_tabla[idx_header + 1:]:
+    for linea in lineas_tabla[idx_header + 1 :]:
         partes = [p.strip() for p in linea.split("|")]
 
         if not any(partes):
@@ -191,6 +221,10 @@ def _parse_pdf_text_to_rows(file_obj):
 
 
 def _resolver_ruta_archivo(archivo_carga):
+    """
+    Devuelve la ruta física del archivo a partir del modelo.
+    Usa primero ruta_almacenamiento, y si no, archivo.path (FileField).
+    """
     path = getattr(archivo_carga, "ruta_almacenamiento", None)
     if not path:
         archivo_field = getattr(archivo_carga, "archivo", None)
@@ -203,14 +237,22 @@ def _resolver_ruta_archivo(archivo_carga):
 
 
 def _leer_archivo_a_rows(archivo_carga):
+    """
+    Abre el archivo físico y lo convierte a una lista de dicts (rows).
+    Soporta CSV, XLSX/XLS y PDF (siempre por texto).
+    """
     path = _resolver_ruta_archivo(archivo_carga)
     if not path:
-        raise FileNotFoundError("ArchivoCarga no tiene ruta_almacenamiento ni archivo.path definido.")
+        raise FileNotFoundError(
+            "ArchivoCarga no tiene ruta_almacenamiento ni archivo.path definido."
+        )
 
     ext = os.path.splitext(path)[1].lower()
 
     if not os.path.exists(path):
-        raise FileNotFoundError(f"No se encontró el archivo en ruta_almacenamiento: {path}")
+        raise FileNotFoundError(
+            "No se encontró el archivo en ruta_almacenamiento: %s" % path
+        )
 
     rows = []
 
@@ -225,15 +267,33 @@ def _leer_archivo_a_rows(archivo_carga):
 
         elif ext == ".pdf":
             rows_from_text = _parse_pdf_text_to_rows(file_obj)
-            rows = rows_from_text or []
+            if rows_from_text:
+                rows = rows_from_text
+            else:
+                return []
         else:
-            raise ValidationError(f"Extensión no soportada: {ext}")
+            raise ValidationError("Extensión de archivo no soportada: %s" % ext)
 
-    return [_normalizar_row_claves(r) for r in rows]
+    rows_normalizadas = []
+    for row in rows:
+        rows_normalizadas.append(_normalizar_row_claves(row))
+
+    return rows_normalizadas
 
 
 @transaction.atomic
 def procesar_archivo_carga(archivo_carga):
+    """
+    Procesa un ArchivoCarga:
+      - Lee el archivo físico
+      - Interpreta filas
+      - Detecta país si no viene explícito
+      - Crea/actualiza CalificacionTributaria
+      - Actualiza resumen y errores en ArchivoCarga
+
+    Acepta tanto una instancia de ArchivoCarga como un ID (pk).
+    """
+
     if not isinstance(archivo_carga, ArchivoCarga):
         archivo_carga = ArchivoCarga.objects.get(pk=archivo_carga)
 
@@ -249,16 +309,27 @@ def procesar_archivo_carga(archivo_carga):
 
         if not rows:
             finished = timezone.now()
+            elapsed = (finished - started).total_seconds()
             archivo_carga.finished_at = finished
+            archivo_carga.tiempo_procesamiento_seg = elapsed
             archivo_carga.estado_proceso = "error"
             archivo_carga.resumen_proceso = {
                 "total_registros": 0,
                 "nuevos": 0,
                 "actualizados": 0,
                 "rechazados": 0,
-                "detalle": "No se encontraron filas utilizables."
+                "detalle": "No se encontraron filas utilizables en el archivo.",
             }
-            archivo_carga.save()
+            archivo_carga.errores_por_fila = []
+            archivo_carga.save(
+                update_fields=[
+                    "finished_at",
+                    "tiempo_procesamiento_seg",
+                    "estado_proceso",
+                    "resumen_proceso",
+                    "errores_por_fila",
+                ]
+            )
             return
 
         total_registros = len(rows)
@@ -267,21 +338,25 @@ def procesar_archivo_carga(archivo_carga):
         rechazados = 0
         errores_por_fila = []
 
-        factor_fields = [f"factor_{i}" for i in range(8, 20)]
+        factor_fields = ["factor_%d" % i for i in range(8, 20)]
 
         for index, row in enumerate(rows, start=2):
             errores = {}
             data_fila = dict(row)
+            fila_numero = index
 
             identificador_cliente = (row.get("identificador_cliente") or "").strip()
             instrumento = (row.get("instrumento") or "").strip()
             observaciones = (row.get("observaciones") or "").strip()
 
             if not identificador_cliente:
-                errores.setdefault("identificador_cliente", []).append("Este campo no puede ser vacío.")
-
+                errores.setdefault("identificador_cliente", []).append(
+                    "This field cannot be blank."
+                )
             if not instrumento:
-                errores.setdefault("instrumento", []).append("Este campo no puede ser vacío.")
+                errores.setdefault("instrumento", []).append(
+                    "This field cannot be blank."
+                )
 
             factores = {}
             for fname in factor_fields:
@@ -295,24 +370,34 @@ def procesar_archivo_carga(archivo_carga):
             pais_valor = (row.get("pais") or "").strip()
 
             if pais_valor:
-                pais_obj = Pais.objects.filter(codigo_iso3__iexact=pais_valor).first() or \
-                           Pais.objects.filter(nombre__iexact=pais_valor).first()
+                pais_obj = (
+                    Pais.objects.filter(codigo_iso3__iexact=pais_valor).first()
+                    or Pais.objects.filter(nombre__iexact=pais_valor).first()
+                )
                 if not pais_obj:
-                    errores.setdefault("pais", []).append(f"País '{pais_valor}' no encontrado.")
+                    errores.setdefault("pais", []).append(
+                        "País '%s' no encontrado en tabla Pais." % pais_valor
+                    )
             else:
-                iso, score = detector.detectar(row)
-                if iso:
-                    pais_obj = Pais.objects.filter(codigo_iso3__iexact=iso).first()
+                codigo_iso3, score = detector.detectar(row)
+                if codigo_iso3:
+                    pais_obj = Pais.objects.filter(
+                        codigo_iso3__iexact=codigo_iso3
+                    ).first()
                 if not pais_obj:
-                    errores.setdefault("pais", []).append("No se pudo determinar el país.")
+                    errores.setdefault("pais", []).append(
+                        "No se pudo determinar el país a partir de los datos."
+                    )
 
             if errores:
                 rechazados += 1
-                errores_por_fila.append({
-                    "fila": index,
-                    "error": errores,
-                    "data": data_fila
-                })
+                errores_por_fila.append(
+                    {
+                        "fila": fila_numero,
+                        "error": errores,
+                        "data": data_fila,
+                    }
+                )
                 continue
 
             calif, created = CalificacionTributaria.objects.get_or_create(
@@ -323,7 +408,7 @@ def procesar_archivo_carga(archivo_carga):
                     pais=pais_obj,
                     observaciones=observaciones,
                     archivo_origen=archivo_carga,
-                    **factores
+                    **factores,
                 ),
             )
 
@@ -339,8 +424,10 @@ def procesar_archivo_carga(archivo_carga):
                 actualizados += 1
 
         finished = timezone.now()
+        elapsed = (finished - started).total_seconds()
 
         archivo_carga.finished_at = finished
+        archivo_carga.tiempo_procesamiento_seg = elapsed
         archivo_carga.estado_proceso = "ok" if rechazados == 0 else "error"
         archivo_carga.resumen_proceso = {
             "total_registros": total_registros,
@@ -349,15 +436,37 @@ def procesar_archivo_carga(archivo_carga):
             "rechazados": rechazados,
         }
         archivo_carga.errores_por_fila = errores_por_fila
-        archivo_carga.save()
+        archivo_carga.save(
+            update_fields=[
+                "finished_at",
+                "tiempo_procesamiento_seg",
+                "estado_proceso",
+                "resumen_proceso",
+                "errores_por_fila",
+            ]
+        )
 
     except Exception as e:
         finished = timezone.now()
+        elapsed = (finished - started).total_seconds()
         archivo_carga.finished_at = finished
+        archivo_carga.tiempo_procesamiento_seg = elapsed
         archivo_carga.estado_proceso = "error"
         archivo_carga.resumen_proceso = {
-            "detalle": f"Error inesperado en procesamiento: {e}"
+            "total_registros": 0,
+            "nuevos": 0,
+            "actualizados": 0,
+            "rechazados": 0,
+            "detalle": "Error inesperado en procesamiento: %s" % str(e),
         }
         archivo_carga.errores_por_fila = []
-        archivo_carga.save()
+        archivo_carga.save(
+            update_fields=[
+                "finished_at",
+                "tiempo_procesamiento_seg",
+                "estado_proceso",
+                "resumen_proceso",
+                "errores_por_fila",
+            ]
+        )
         raise
