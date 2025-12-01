@@ -1,7 +1,7 @@
 from django.contrib.auth import authenticate, get_user_model
 from rest_framework import status
 from rest_framework.authtoken.models import Token
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -17,6 +17,13 @@ User = get_user_model()
 
 
 class RegistroCorredorView(APIView):
+    """
+    Crea:
+      - User de Django
+      - UsuarioPerfil con rol corredor (o el que defina el serializer)
+      - Corredor asociado (si no se envía corredor_id)
+    Devuelve también un token para autenticarse.
+    """
     permission_classes = [AllowAny]
 
     def post(self, request):
@@ -33,6 +40,10 @@ class RegistroCorredorView(APIView):
 
 
 class LoginView(APIView):
+    """
+    Login por username + password.
+    Devuelve token + datos básicos del usuario.
+    """
     permission_classes = [AllowAny]
 
     def post(self, request):
@@ -44,7 +55,7 @@ class LoginView(APIView):
         password = serializer.validated_data["password"]
 
         user = authenticate(request, username=username, password=password)
-        if not user:
+        if not user or not user.is_active:
             return Response(
                 {"detail": "Credenciales inválidas"},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -64,6 +75,13 @@ class LoginView(APIView):
 
 
 class WhoAmIView(APIView):
+    """
+    Devuelve la información del perfil del usuario autenticado.
+    Requiere enviar el token en el header:
+        Authorization: Token <tu_token>
+    """
+    permission_classes = [IsAuthenticated]
+
     def get(self, request):
         perfil = getattr(request.user, "perfil", None)
         if not perfil:
@@ -76,6 +94,15 @@ class WhoAmIView(APIView):
 
 
 class CambiarRolView(APIView):
+    """
+    Permite cambiar el rol de un UsuarioPerfil.
+    Solo puede hacerlo:
+      - superuser
+      - staff
+      - usuario cuyo perfil tenga rol = 'admin'
+    """
+    permission_classes = [IsAuthenticated]
+
     def patch(self, request, usuario_id):
         user = request.user
         es_admin = user.is_superuser or user.is_staff

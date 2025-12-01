@@ -104,7 +104,7 @@ class PaisViewSet(viewsets.ModelViewSet):
 
 
 class CorredorViewSet(viewsets.ModelViewSet):
-    queryset = Corredor.objects.all()
+    queryset = Corredor.objects.select_related("pais").all()
     serializer_class = CorredorSerializer
     permission_classes = [IsStaffOrReadOnly]
 
@@ -141,7 +141,6 @@ class CalificacionTributariaViewSet(viewsets.ModelViewSet):
         # 2) Filtros por query params (búsqueda avanzada)
         params = self.request.query_params
 
-        # filtros específicos
         pais_id = params.get("pais_id")
         instrumento = params.get("instrumento")
         cliente = params.get("cliente")
@@ -205,7 +204,7 @@ class CalificacionTributariaViewSet(viewsets.ModelViewSet):
         """
         Permite probar la detección automática enviando un texto manual
         (por ejemplo una descripción con RUT/NIT/RUC).
-        No afecta la carga masiva, es solo una utilidad extra.
+        Actualiza pais_detectado si logra identificarlo.
         """
         calif = self.get_object()
         texto = request.data.get("texto", "")
@@ -222,9 +221,9 @@ class CalificacionTributariaViewSet(viewsets.ModelViewSet):
             "observaciones": texto,
         }
 
-        iso3_detectado, confianza, detalle = DetectorPaisTributario.detectar_desde_row(
-            row
-        )
+        detector = DetectorPaisTributario()
+        iso3_detectado, confianza = detector.detectar(row)
+        detalle = {}
 
         pais_detectado = None
         if iso3_detectado:
@@ -232,8 +231,9 @@ class CalificacionTributariaViewSet(viewsets.ModelViewSet):
                 codigo_iso3__iexact=iso3_detectado
             ).first()
 
-        calif.pais_detectado = pais_detectado or calif.pais_detectado
-        calif.save()
+        if pais_detectado:
+            calif.pais_detectado = pais_detectado
+            calif.save(update_fields=["pais_detectado"])
 
         return Response(
             {
@@ -283,6 +283,13 @@ class ArchivoCargaViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=["post"], url_path="subir")
     def subir_archivo(self, request):
+        """
+        Endpoint de carga masiva:
+          - Guarda el archivo físico usando default_storage
+          - Crea un ArchivoCarga
+          - Llama a procesar_archivo_carga(archivo_carga)
+          - Devuelve el job con su resumen
+        """
         user = request.user
         if not user.is_authenticated:
             raise PermissionDenied("Autenticación requerida.")
@@ -316,6 +323,7 @@ class ArchivoCargaViewSet(viewsets.ModelViewSet):
         else:
             corredor = perfil.corredor
 
+        # Guardamos físicamente el archivo usando default_storage
         filename = default_storage.save(f"cargas/{upload.name}", upload)
         ruta = default_storage.path(filename)
 
@@ -329,8 +337,8 @@ class ArchivoCargaViewSet(viewsets.ModelViewSet):
             submitted_by=user,
         )
 
-        with default_storage.open(filename, "rb") as f:
-            procesar_archivo_carga(archivo_carga, f)
+        # Procesa el archivo (solo 1 parámetro)
+        procesar_archivo_carga(archivo_carga)
 
         serializer = self.get_serializer(archivo_carga)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
