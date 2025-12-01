@@ -9,3 +9,4 @@ pandas
 openpyxl
 xlrd
 pdfplumber
+djangorestframework-simplejwt
