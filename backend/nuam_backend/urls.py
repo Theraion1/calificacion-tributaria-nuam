@@ -52,7 +52,6 @@ urlpatterns = [
 
     # Endpoints existentes
     path("api/registro-corredor/", RegistroCorredorView.as_view(), name="registro-corredor"),
-    path("api/login/", LoginView.as_view(), name="login"),
     path("api/whoami/", WhoAmIView.as_view(), name="whoami"),
     path(
         "api/usuarios/<int:usuario_id>/cambiar-rol/",
