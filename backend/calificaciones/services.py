@@ -1,4 +1,5 @@
 import os
+import re
 from decimal import Decimal
 
 import pandas as pd
@@ -8,6 +9,102 @@ from django.db import transaction
 from django.utils import timezone
 
 from .models import ArchivoCarga, CalificacionTributaria, Pais
+
+
+class DetectorPaisTributario:
+    """
+    Detección simple de país a partir de los datos de una fila.
+    Usa patrones de identificadores (RUT/NIT/RUC) y palabras clave.
+    Devuelve un código ISO3 (CHL, COL, PER) y un score de confianza.
+    """
+
+    PATRONES = {
+        "CHL": {
+            "regex": [
+                r"\d{1,2}\.\d{3}\.\d{3}-[0-9kK]",   # RUT Chile 12.345.678-9
+            ],
+            "keywords": ["CHILE", "SANTIAGO", "RUT"],
+            "score_regex": 0.7,
+            "score_keyword": 0.2,
+        },
+        "COL": {
+            "regex": [
+                r"\d{3}\.\d{3}\.\d{3}-\d",          # NIT Colombia 123.456.789-0
+            ],
+            "keywords": ["COLOMBIA", "BOGOTA", "NIT"],
+            "score_regex": 0.7,
+            "score_keyword": 0.2,
+        },
+        "PER": {
+            "regex": [
+                r"2\d{10}",                         # RUC Perú: 11 dígitos empezando con 2
+            ],
+            "keywords": ["PERU", "LIMA", "RUC"],
+            "score_regex": 0.7,
+            "score_keyword": 0.2,
+        },
+    }
+
+    @classmethod
+    def _armar_texto(cls, row: dict) -> str:
+        """
+        Construye un texto base concatenando campos relevantes de la fila.
+        Así el detector puede buscar patrones dentro de ese texto.
+        """
+        partes = []
+        for key in (
+            "identificador_cliente",
+            "instrumento",
+            "observaciones",
+            "pais",   # por si viene como texto
+            "PAIS",
+        ):
+            val = row.get(key)
+            if val is not None:
+                partes.append(str(val))
+        return " ".join(partes)
+
+    @classmethod
+    def detectar_desde_row(cls, row: dict):
+        """
+        A partir de una fila (dict), intenta detectar el país.
+        Devuelve:
+        - codigo_iso3 (str o None, ej: 'CHL', 'COL', 'PER')
+        - confianza (float 0.0–1.0)
+        - detalle_scores (dict con score por país)
+        """
+        texto = cls._armar_texto(row)
+        if not texto:
+            return None, 0.0, {}
+
+        texto_upper = texto.upper()
+        resultados = {}
+
+        for iso3, reglas in cls.PATRONES.items():
+            score = 0.0
+
+            # 1) Regex (RUT/NIT/RUC)
+            for patron in reglas["regex"]:
+                if re.search(patron, texto):
+                    score += reglas["score_regex"]
+
+            # 2) Palabras clave
+            for kw in reglas["keywords"]:
+                if kw in texto_upper:
+                    score += reglas["score_keyword"]
+
+            resultados[iso3] = round(score, 2)
+
+        if not resultados:
+            return None, 0.0, {}
+
+        iso3_detectado = max(resultados, key=resultados.get)
+        confianza = resultados[iso3_detectado]
+
+        if confianza == 0:
+            return None, 0.0, resultados
+
+        return iso3_detectado, confianza, resultados
 
 
 def procesar_archivo_carga(archivo_carga: ArchivoCarga, file_obj) -> None:
@@ -192,31 +289,46 @@ def procesar_archivo_carga(archivo_carga: ArchivoCarga, file_obj) -> None:
         )
         return
 
-    # Lógica común para CSV, Excel y PDF 
+    # Lógica común para CSV, Excel y PDF
     for idx, row in enumerate(rows, start=2):
         procesados += 1
         try:
             with transaction.atomic():
+                # 1) País manual desde la columna 'pais' si viene
                 pais = None
                 pais_codigo = str(row.get("pais") or "").strip()
                 if pais_codigo:
                     pais = Pais.objects.filter(codigo_iso3=pais_codigo).first()
 
+                # 2) Detección automática de país desde la fila
+                iso3_detectado, confianza, _detalle = DetectorPaisTributario.detectar_desde_row(row)
+                pais_detectado = None
+                if iso3_detectado:
+                    pais_detectado = Pais.objects.filter(
+                        codigo_iso3__iexact=iso3_detectado
+                    ).first()
+
+                # 3) Crear o recuperar la calificación
                 calif, created = CalificacionTributaria.objects.get_or_create(
                     corredor=corredor,
                     identificador_cliente=str(row.get("identificador_cliente") or "").strip(),
                     instrumento=str(row.get("instrumento") or "").strip(),
                     defaults={
                         "moneda": str(row.get("moneda") or "CLP"),
-                        "pais": pais,
+                        # Prioridad: país del archivo; si no hay, país detectado.
+                        "pais": pais or pais_detectado,
+                        "pais_detectado": pais_detectado,
                     },
                 )
 
+                # 4) Actualizar campos base
                 calif.moneda = str(row.get("moneda") or calif.moneda or "CLP")
-                calif.pais = pais or calif.pais
+                calif.pais = pais or pais_detectado or calif.pais
+                calif.pais_detectado = pais_detectado or calif.pais_detectado
                 calif.archivo_origen = archivo_carga
                 calif.observaciones = row.get("observaciones") or ""
 
+                # 5) Factores 8–19
                 for n in range(8, 20):
                     field_name = f"factor_{n}"
                     raw = row.get(field_name, "")

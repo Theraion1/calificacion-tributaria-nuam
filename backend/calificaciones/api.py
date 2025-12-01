@@ -5,7 +5,7 @@ from rest_framework.response import Response
 from rest_framework.exceptions import PermissionDenied
 
 from django.core.files.storage import default_storage
-from django.db.models import Q  # <- NUEVO IMPORT
+from django.db.models import Q
 
 from .models import (
     Pais,
@@ -21,7 +21,7 @@ from .serializers import (
     ArchivoCargaSerializer,
     HistorialCalificacionSerializer,
 )
-from .services import procesar_archivo_carga
+from .services import procesar_archivo_carga, DetectorPaisTributario
 
 
 class IsStaffOrReadOnly(permissions.BasePermission):
@@ -142,13 +142,13 @@ class CalificacionTributariaViewSet(viewsets.ModelViewSet):
         params = self.request.query_params
 
         # filtros específicos
-        pais_id = params.get("pais_id")              # ej: ?pais_id=1
-        instrumento = params.get("instrumento")      # ej: ?instrumento=ACCION
-        cliente = params.get("cliente")              # ej: ?cliente=12345678
-        moneda = params.get("moneda")                # ej: ?moneda=CLP
-        search = params.get("search")                # búsqueda general
-        creado_desde = params.get("creado_desde")    # ej: ?creado_desde=2025-11-01
-        creado_hasta = params.get("creado_hasta")    # ej: ?creado_hasta=2025-11-30
+        pais_id = params.get("pais_id")
+        instrumento = params.get("instrumento")
+        cliente = params.get("cliente")
+        moneda = params.get("moneda")
+        search = params.get("search")
+        creado_desde = params.get("creado_desde")
+        creado_hasta = params.get("creado_hasta")
 
         if pais_id:
             qs = qs.filter(pais_id=pais_id)
@@ -180,7 +180,6 @@ class CalificacionTributariaViewSet(viewsets.ModelViewSet):
         if creado_hasta:
             qs = qs.filter(creado_en__date__lte=creado_hasta)
 
-        # orden por defecto: las más nuevas primero
         return qs.order_by("-creado_en")
 
     def perform_create(self, serializer):
@@ -200,6 +199,51 @@ class CalificacionTributariaViewSet(viewsets.ModelViewSet):
     def perform_update(self, serializer):
         user = self.request.user
         serializer.save(actualizado_por=user)
+
+    @action(detail=True, methods=["post"], url_path="detectar-pais")
+    def detectar_pais(self, request, pk=None):
+        """
+        Permite probar la detección automática enviando un texto manual
+        (por ejemplo una descripción con RUT/NIT/RUC).
+        No afecta la carga masiva, es solo una utilidad extra.
+        """
+        calif = self.get_object()
+        texto = request.data.get("texto", "")
+
+        if not texto:
+            return Response(
+                {"detail": "Debe enviar un campo 'texto'."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        row = {
+            "identificador_cliente": calif.identificador_cliente,
+            "instrumento": calif.instrumento,
+            "observaciones": texto,
+        }
+
+        iso3_detectado, confianza, detalle = DetectorPaisTributario.detectar_desde_row(
+            row
+        )
+
+        pais_detectado = None
+        if iso3_detectado:
+            pais_detectado = Pais.objects.filter(
+                codigo_iso3__iexact=iso3_detectado
+            ).first()
+
+        calif.pais_detectado = pais_detectado or calif.pais_detectado
+        calif.save()
+
+        return Response(
+            {
+                "id": calif.id,
+                "pais_detectado": str(pais_detectado) if pais_detectado else None,
+                "iso3_detectado": iso3_detectado,
+                "confianza": confianza,
+                "detalle_scores": detalle,
+            }
+        )
 
 
 class ArchivoCargaViewSet(viewsets.ModelViewSet):
@@ -243,21 +287,32 @@ class ArchivoCargaViewSet(viewsets.ModelViewSet):
         if not user.is_authenticated:
             raise PermissionDenied("Autenticación requerida.")
         perfil = getattr(user, "perfil", None)
-        if not (user.is_superuser or user.is_staff) and not (perfil and perfil.rol == "corredor"):
+        if not (user.is_superuser or user.is_staff) and not (
+            perfil and perfil.rol == "corredor"
+        ):
             raise PermissionDenied("No autorizado.")
 
         upload = request.FILES.get("archivo")
         if not upload:
-            return Response({"detail": "Debe adjuntar archivo."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"detail": "Debe adjuntar archivo."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         if user.is_superuser or user.is_staff:
             corredor_id = request.data.get("corredor")
             if not corredor_id:
-                return Response({"detail": "Debe indicar corredor."}, status=status.HTTP_400_BAD_REQUEST)
+                return Response(
+                    {"detail": "Debe indicar corredor."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
             try:
                 corredor = Corredor.objects.get(pk=corredor_id)
             except Corredor.DoesNotExist:
-                return Response({"detail": "Corredor no encontrado."}, status=status.HTTP_400_BAD_REQUEST)
+                return Response(
+                    {"detail": "Corredor no encontrado."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
         else:
             corredor = perfil.corredor
 
