@@ -109,10 +109,10 @@ class DetectorPaisTributario:
 
 def _parse_pdf_text_to_rows(file_obj):
     """
-    Fallback para PDFs sin tabla explícita:
+    Fallback para PDFs sin tabla explícita o tablas falsas:
     - Lee el texto de todas las páginas.
-    - Usa la primera línea como encabezado.
-    - Detecta separador (|, ;, ,) y arma filas.
+    - Busca la primera línea que tenga separador (|, ;, ,) y la toma como encabezado.
+    - Usa las líneas siguientes como filas.
     Devuelve lista de dicts o [] si no se pudo interpretar.
     """
     file_obj.seek(0)
@@ -128,7 +128,18 @@ def _parse_pdf_text_to_rows(file_obj):
     if not lines:
         return []
 
-    header_line = lines[0]
+    # Buscar la primera línea con separador para usarla como encabezado
+    header_idx = None
+    header_line = None
+    for i, line in enumerate(lines):
+        if any(sep in line for sep in ("|", ";", ",")):
+            header_idx = i
+            header_line = line
+            break
+
+    if header_idx is None or header_line is None:
+        return []
+
     separator = None
     for sep in ("|", ";", ","):
         if sep in header_line:
@@ -141,7 +152,7 @@ def _parse_pdf_text_to_rows(file_obj):
     raw_headers = [h.strip() for h in header_line.split(separator)]
     headers = [h.lower().replace(" ", "_") for h in raw_headers]
 
-    data_lines = lines[1:]
+    data_lines = lines[header_idx + 1 :]
     rows = []
 
     for line in data_lines:
@@ -188,17 +199,30 @@ def procesar_archivo_carga(archivo_carga: ArchivoCarga, file_obj) -> None:
         df = pd.read_excel(file_obj)
         rows = df.to_dict(orient="records")
 
-    # 3) PDF: primero tabla; si no, fallback por texto
+    # 3) PDF: primero tabla; si no sirve, fallback por texto
     elif ext == ".pdf":
         file_obj.seek(0)
         try:
             extracted_rows = []
+            usar_fallback_texto = False
 
             with pdfplumber.open(file_obj) as pdf:
                 for page in pdf.pages:
                     table = page.extract_table()
                     if not table:
                         continue
+
+                    # Si alguna celda tiene '|', asumimos que es texto con separadores,
+                    # no una tabla "real" -> usamos fallback de texto.
+                    hay_pipes = any(
+                        isinstance(cell, str) and "|" in cell
+                        for row in table
+                        for cell in (row or [])
+                        if cell is not None
+                    )
+                    if hay_pipes:
+                        usar_fallback_texto = True
+                        break
 
                     header, *data_rows = table
                     if not header:
@@ -231,12 +255,41 @@ def procesar_archivo_carga(archivo_carga: ArchivoCarga, file_obj) -> None:
                         extracted_rows.append(row_dict)
 
                     if extracted_rows:
+                        # usamos solo la primera tabla con datos
                         break
 
-            if extracted_rows:
+            if usar_fallback_texto:
+                rows_from_text = _parse_pdf_text_to_rows(file_obj)
+                if rows_from_text:
+                    rows = rows_from_text
+                else:
+                    finished = timezone.now()
+                    elapsed = (finished - started).total_seconds()
+                    archivo_carga.finished_at = finished
+                    archivo_carga.tiempo_procesamiento_seg = elapsed
+                    archivo_carga.estado_proceso = "error"
+                    archivo_carga.resumen_proceso = {
+                        "total_registros": 0,
+                        "nuevos": 0,
+                        "actualizados": 0,
+                        "rechazados": 0,
+                        "detalle": "No se pudieron interpretar filas desde el PDF (fallback).",
+                    }
+                    archivo_carga.errores_por_fila = []
+                    archivo_carga.save(
+                        update_fields=[
+                            "finished_at",
+                            "tiempo_procesamiento_seg",
+                            "estado_proceso",
+                            "resumen_proceso",
+                            "errores_por_fila",
+                        ]
+                    )
+                    return
+            elif extracted_rows:
                 rows = extracted_rows
             else:
-                # Fallback: intentar interpretar texto plano como tabla
+                # No hubo tabla útil -> intentar fallback de texto
                 rows_from_text = _parse_pdf_text_to_rows(file_obj)
                 if rows_from_text:
                     rows = rows_from_text
