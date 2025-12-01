@@ -116,104 +116,81 @@ class CalificacionTributariaViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
-        qs = CalificacionTributaria.objects.select_related("corredor", "pais").all()
+        qs = CalificacionTributaria.objects.select_related("corredor", "pais")
 
-        # 1) Seguridad / segregación por corredor y rol
         if not user.is_authenticated:
             return qs.none()
 
+        perfil = getattr(user, "perfil", None)
+
         if user.is_superuser or user.is_staff:
-            # staff ve todo, sin filtro por corredor
+            pass
+        elif perfil and perfil.rol == "corredor":
+            qs = qs.filter(corredor=perfil.corredor)
+        elif perfil and perfil.rol == "auditor":
             pass
         else:
-            perfil = getattr(user, "perfil", None)
-            if not perfil:
-                return qs.none()
+            return qs.none()
 
-            if perfil.rol == "corredor":
-                qs = qs.filter(corredor=perfil.corredor)
-            elif perfil.rol == "auditor":
-                # auditor ve todo
-                pass
-            else:
-                return qs.none()
-
-        # 2) Filtros por query params (búsqueda avanzada)
         params = self.request.query_params
 
-        pais_id = params.get("pais_id")
-        instrumento = params.get("instrumento")
-        cliente = params.get("cliente")
-        moneda = params.get("moneda")
-        search = params.get("search")
-        creado_desde = params.get("creado_desde")
-        creado_hasta = params.get("creado_hasta")
+        if params.get("pais_id"):
+            qs = qs.filter(pais_id=params["pais_id"])
 
-        if pais_id:
-            qs = qs.filter(pais_id=pais_id)
-
-        # solo staff puede filtrar por corredor arbitrario
         corredor_id = params.get("corredor_id")
         if corredor_id and (user.is_superuser or user.is_staff):
             qs = qs.filter(corredor_id=corredor_id)
 
-        if instrumento:
-            qs = qs.filter(instrumento__icontains=instrumento)
+        if params.get("instrumento"):
+            qs = qs.filter(instrumento__icontains=params["instrumento"])
 
-        if cliente:
-            qs = qs.filter(identificador_cliente__icontains=cliente)
+        if params.get("cliente"):
+            qs = qs.filter(identificador_cliente__icontains=params["cliente"])
 
-        if moneda:
-            qs = qs.filter(moneda__iexact=moneda)
+        if params.get("moneda"):
+            qs = qs.filter(moneda__iexact=params["moneda"])
 
-        if search:
+        if params.get("search"):
+            s = params["search"]
             qs = qs.filter(
-                Q(instrumento__icontains=search)
-                | Q(identificador_cliente__icontains=search)
-                | Q(observaciones__icontains=search)
+                Q(instrumento__icontains=s)
+                | Q(identificador_cliente__icontains=s)
+                | Q(observaciones__icontains=s)
             )
 
-        if creado_desde:
-            qs = qs.filter(creado_en__date__gte=creado_desde)
+        if params.get("creado_desde"):
+            qs = qs.filter(creado_en__date__gte=params["creado_desde"])
 
-        if creado_hasta:
-            qs = qs.filter(creado_en__date__lte=creado_hasta)
+        if params.get("creado_hasta"):
+            qs = qs.filter(creado_en__date__lte=params["creado_hasta"])
 
         return qs.order_by("-creado_en")
 
     def perform_create(self, serializer):
         user = self.request.user
+        perfil = getattr(user, "perfil", None)
+
         if user.is_superuser or user.is_staff:
             serializer.save(creado_por=user, actualizado_por=user)
-            return
-        perfil = getattr(user, "perfil", None)
-        if not perfil or perfil.rol != "corredor":
-            raise PermissionDenied("Solo corredores pueden crear calificaciones.")
-        serializer.save(
-            corredor=perfil.corredor,
-            creado_por=user,
-            actualizado_por=user,
-        )
+        elif perfil and perfil.rol == "corredor":
+            serializer.save(
+                corredor=perfil.corredor,
+                creado_por=user,
+                actualizado_por=user,
+            )
+        else:
+            raise PermissionDenied("No autorizado")
 
     def perform_update(self, serializer):
-        user = self.request.user
-        serializer.save(actualizado_por=user)
+        serializer.save(actualizado_por=self.request.user)
 
-    @action(detail=True, methods=["post"], url_path="detectar-pais")
+    @action(detail=True, methods=["post"])
     def detectar_pais(self, request, pk=None):
-        """
-        Permite probar la detección automática enviando un texto manual
-        (por ejemplo una descripción con RUT/NIT/RUC).
-        Actualiza pais_detectado si logra identificarlo.
-        """
         calif = self.get_object()
-        texto = request.data.get("texto", "")
+        texto = request.data.get("texto")
 
         if not texto:
-            return Response(
-                {"detail": "Debe enviar un campo 'texto'."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            return Response({"detail": "Debe enviar texto."}, status=400)
 
         row = {
             "identificador_cliente": calif.identificador_cliente,
@@ -222,145 +199,107 @@ class CalificacionTributariaViewSet(viewsets.ModelViewSet):
         }
 
         detector = DetectorPaisTributario()
-        iso3_detectado, confianza = detector.detectar(row)
-        detalle = {}
+        iso3, score = detector.detectar(row)
 
-        pais_detectado = None
-        if iso3_detectado:
-            pais_detectado = Pais.objects.filter(
-                codigo_iso3__iexact=iso3_detectado
-            ).first()
+        pais = None
+        if iso3:
+            pais = Pais.objects.filter(codigo_iso3__iexact=iso3).first()
 
-        if pais_detectado:
-            calif.pais_detectado = pais_detectado
+        if pais:
+            calif.pais_detectado = pais
             calif.save(update_fields=["pais_detectado"])
 
-        return Response(
-            {
-                "id": calif.id,
-                "pais_detectado": str(pais_detectado) if pais_detectado else None,
-                "iso3_detectado": iso3_detectado,
-                "confianza": confianza,
-                "detalle_scores": detalle,
-            }
-        )
+        return Response({
+            "iso3_detectado": iso3,
+            "confianza": score,
+            "pais_detectado": str(pais) if pais else None
+        })
 
 
 class ArchivoCargaViewSet(viewsets.ModelViewSet):
-    queryset = ArchivoCarga.objects.select_related("corredor").all()
+    queryset = ArchivoCarga.objects.select_related("corredor")
     serializer_class = ArchivoCargaSerializer
     permission_classes = [ArchivoCargaPermission]
     parser_classes = [MultiPartParser, FormParser]
 
     def get_queryset(self):
         user = self.request.user
-        qs = ArchivoCarga.objects.select_related("corredor").all()
+        qs = ArchivoCarga.objects.select_related("corredor")
+
         if not user.is_authenticated:
             return qs.none()
+
+        perfil = getattr(user, "perfil", None)
+
         if user.is_superuser or user.is_staff:
             return qs
-        perfil = getattr(user, "perfil", None)
-        if not perfil:
-            return qs.none()
-        if perfil.rol == "corredor":
+        if perfil and perfil.rol == "corredor":
             return qs.filter(corredor=perfil.corredor)
-        if perfil.rol == "auditor":
+        if perfil and perfil.rol == "auditor":
             return qs
+
         return qs.none()
 
-    def perform_create(self, serializer):
-        user = self.request.user
-        if user.is_superuser or user.is_staff:
-            serializer.save(submitted_by=user)
-            return
-        perfil = getattr(user, "perfil", None)
-        if not perfil or perfil.rol != "corredor":
-            raise PermissionDenied("Solo corredores pueden crear cargas.")
-        serializer.save(
-            corredor=perfil.corredor,
-            submitted_by=user,
-        )
-
-    @action(detail=False, methods=["post"], url_path="subir")
-    def subir_archivo(self, request):
-        """
-        Endpoint de carga masiva:
-          - Guarda el archivo físico usando default_storage
-          - Crea un ArchivoCarga
-          - Llama a procesar_archivo_carga(archivo_carga)
-          - Devuelve el job con su resumen
-        """
+    @action(detail=False, methods=["post"])
+    def subir(self, request):
         user = request.user
+        perfil = getattr(user, "perfil", None)
+
         if not user.is_authenticated:
             raise PermissionDenied("Autenticación requerida.")
-        perfil = getattr(user, "perfil", None)
-        if not (user.is_superuser or user.is_staff) and not (
-            perfil and perfil.rol == "corredor"
-        ):
+
+        if not (user.is_superuser or user.is_staff or (perfil and perfil.rol == "corredor")):
             raise PermissionDenied("No autorizado.")
 
         upload = request.FILES.get("archivo")
         if not upload:
-            return Response(
-                {"detail": "Debe adjuntar archivo."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            return Response({"detail": "Debe subir un archivo."}, status=400)
 
         if user.is_superuser or user.is_staff:
             corredor_id = request.data.get("corredor")
             if not corredor_id:
-                return Response(
-                    {"detail": "Debe indicar corredor."},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
+                return Response({"detail": "Debe indicar corredor."}, status=400)
             try:
                 corredor = Corredor.objects.get(pk=corredor_id)
             except Corredor.DoesNotExist:
-                return Response(
-                    {"detail": "Corredor no encontrado."},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
+                return Response({"detail": "Corredor no encontrado."}, status=400)
         else:
             corredor = perfil.corredor
 
-        # Guardamos físicamente el archivo usando default_storage
         filename = default_storage.save(f"cargas/{upload.name}", upload)
-        ruta = default_storage.path(filename)
+        ruta_fisica = default_storage.path(filename)
 
-        archivo_carga = ArchivoCarga.objects.create(
+        obj = ArchivoCarga.objects.create(
             corredor=corredor,
             nombre_original=upload.name,
-            ruta_almacenamiento=ruta,
-            tipo_mime=upload.content_type or "",
+            ruta_almacenamiento=ruta_fisica,
+            tipo_mime=upload.content_type,
             tamano_bytes=upload.size,
             estado_proceso="pendiente",
             submitted_by=user,
         )
 
-        # Procesa el archivo (solo 1 parámetro)
-        procesar_archivo_carga(archivo_carga)
+        try:
+            procesar_archivo_carga(obj)
+        except Exception:
+            obj.refresh_from_db()
 
-        serializer = self.get_serializer(archivo_carga)
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(ArchivoCargaSerializer(obj).data)
 
-    @action(detail=True, methods=["get"], url_path="resumen")
+    @action(detail=True, methods=["get"])
     def resumen(self, request, pk=None):
-        job = self.get_object()
-        return Response(
-            {
-                "estado_proceso": job.estado_proceso,
-                "resumen_proceso": job.resumen_proceso,
-                "errores_por_fila": job.errores_por_fila,
-                "started_at": job.started_at,
-                "finished_at": job.finished_at,
-                "tiempo_procesamiento_seg": job.tiempo_procesamiento_seg,
-            }
-        )
+        obj = self.get_object()
+        return Response({
+            "estado_proceso": obj.estado_proceso,
+            "resumen_proceso": obj.resumen_proceso,
+            "errores_por_fila": obj.errores_por_fila,
+            "started_at": obj.started_at,
+            "finished_at": obj.finished_at,
+            "tiempo_procesamiento_seg": obj.tiempo_procesamiento_seg,
+        })
 
 
 class HistorialCalificacionViewSet(viewsets.ReadOnlyModelViewSet):
-    queryset = HistorialCalificacion.objects.select_related(
-        "calificacion", "usuario"
-    ).all()
+    queryset = HistorialCalificacion.objects.select_related("calificacion", "usuario")
     serializer_class = HistorialCalificacionSerializer
     permission_classes = [permissions.IsAuthenticated]
