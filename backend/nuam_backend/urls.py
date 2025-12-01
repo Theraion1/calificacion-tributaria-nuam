@@ -18,6 +18,11 @@ from django.contrib import admin
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 
+from rest_framework_simplejwt.views import (
+    TokenObtainPairView,
+    TokenRefreshView,
+)
+
 from calificaciones.api import (
     PaisViewSet,
     CorredorViewSet,
@@ -43,6 +48,11 @@ router.register(r"historial", HistorialCalificacionViewSet, basename="historial"
 urlpatterns = [
     path("admin/", admin.site.urls),
 
+    # Endpoints JWT para el front
+    path("api/token/", TokenObtainPairView.as_view(), name="token_obtain_pair"),
+    path("api/token/refresh/", TokenRefreshView.as_view(), name="token_refresh"),
+
+    # Tus endpoints actuales
     path("api/registro-corredor/", RegistroCorredorView.as_view(), name="registro-corredor"),
     path("api/login/", LoginView.as_view(), name="login"),
     path("api/whoami/", WhoAmIView.as_view(), name="whoami"),
@@ -54,5 +64,3 @@ urlpatterns = [
 
     path("api/", include(router.urls)),
 ]
-
-
