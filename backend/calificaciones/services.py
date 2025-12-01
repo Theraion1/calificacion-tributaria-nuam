@@ -21,7 +21,7 @@ class DetectorPaisTributario:
     PATRONES = {
         "CHL": {
             "regex": [
-                r"\d{1,2}\.\d{3}\.\d{3}-[0-9kK]",   # RUT Chile 12.345.678-9
+                r"\d{1,2}\.\d{3}\.\d{3}-[0-9kK]",  # RUT Chile 12.345.678-9
             ],
             "keywords": ["CHILE", "SANTIAGO", "RUT"],
             "score_regex": 0.7,
@@ -29,15 +29,15 @@ class DetectorPaisTributario:
         },
         "COL": {
             "regex": [
-                r"\d{3}\.\d{3}\.\d{3}-\d",          # NIT Colombia 123.456.789-0
+                r"\d{3}\.\d{3}\.\d{3}-\d",  # NIT 123.456.789-0
             ],
-            "keywords": ["COLOMBIA", "BOGOTA", "NIT"],
+            "keywords": ["COLOMBIA", "COLOMBIA", "BOGOTA", "NIT"],
             "score_regex": 0.7,
             "score_keyword": 0.2,
         },
         "PER": {
             "regex": [
-                r"2\d{10}",                         # RUC Perú: 11 dígitos empezando con 2
+                r"2\d{10}",  # RUC Perú: 11 dígitos y suele empezar con 10, 20, 2x...
             ],
             "keywords": ["PERU", "LIMA", "RUC"],
             "score_regex": 0.7,
@@ -45,306 +45,265 @@ class DetectorPaisTributario:
         },
     }
 
-    @classmethod
-    def _armar_texto(cls, row: dict) -> str:
+    def detectar(self, row: dict) -> tuple[str | None, float]:
         """
-        Construye un texto base concatenando campos relevantes de la fila.
-        Así el detector puede buscar patrones dentro de ese texto.
+        Recibe una fila (dict) y devuelve (codigo_iso3, score).
+        Si no detecta nada, devuelve (None, 0.0).
         """
-        partes = []
-        for key in (
-            "identificador_cliente",
-            "instrumento",
-            "observaciones",
-            "pais",   # por si viene como texto
-            "PAIS",
-        ):
-            val = row.get(key)
-            if val is not None:
-                partes.append(str(val))
-        return " ".join(partes)
-
-    @classmethod
-    def detectar_desde_row(cls, row: dict):
-        """
-        A partir de una fila (dict), intenta detectar el país.
-        Devuelve:
-        - codigo_iso3 (str o None, ej: 'CHL', 'COL', 'PER')
-        - confianza (float 0.0–1.0)
-        - detalle_scores (dict con score por país)
-        """
-        texto = cls._armar_texto(row)
-        if not texto:
-            return None, 0.0, {}
-
+        # Unimos todos los valores de la fila como texto grande
+        textos = []
+        for v in row.values():
+            if v is None:
+                continue
+            textos.append(str(v))
+        texto = " ".join(textos)
         texto_upper = texto.upper()
-        resultados = {}
 
-        for iso3, reglas in cls.PATRONES.items():
+        mejor_codigo = None
+        mejor_score = 0.0
+
+        for codigo, cfg in self.PATRONES.items():
             score = 0.0
 
-            # 1) Regex (RUT/NIT/RUC)
-            for patron in reglas["regex"]:
+            # regex
+            for patron in cfg.get("regex", []):
                 if re.search(patron, texto):
-                    score += reglas["score_regex"]
+                    score += cfg.get("score_regex", 0.0)
 
-            # 2) Palabras clave
-            for kw in reglas["keywords"]:
+            # keywords
+            for kw in cfg.get("keywords", []):
                 if kw in texto_upper:
-                    score += reglas["score_keyword"]
+                    score += cfg.get("score_keyword", 0.0)
 
-            resultados[iso3] = round(score, 2)
+            if score > mejor_score:
+                mejor_score = score
+                mejor_codigo = codigo
 
-        if not resultados:
-            return None, 0.0, {}
-
-        iso3_detectado = max(resultados, key=resultados.get)
-        confianza = resultados[iso3_detectado]
-
-        if confianza == 0:
-            return None, 0.0, resultados
-
-        return iso3_detectado, confianza, resultados
+        return mejor_codigo, mejor_score
 
 
-def _parse_pdf_text_to_rows(file_obj):
+def _to_decimal(value) -> Decimal | None:
     """
-    Fallback para PDFs sin tabla explícita o tablas falsas:
-    - Lee el texto de todas las páginas.
-    - Busca la primera línea que tenga separador (|, ;, ,) y la toma como encabezado.
-    - Usa las líneas siguientes como filas.
-    Devuelve lista de dicts o [] si no se pudo interpretar.
+    Convierte distintos formatos a Decimal.
+    Acepta:
+      - "", None -> None
+      - "0.1", "0,1", "0,10", 0.1, 1, etc.
+    Lanza ValidationError si no se puede interpretar.
     """
-    file_obj.seek(0)
-    lines = []
+    if value is None:
+        return None
+
+    if isinstance(value, Decimal):
+        return value
+
+    if isinstance(value, (int, float)):
+        return Decimal(str(value))
+
+    s = str(value).strip()
+    if s == "":
+        return None
+
+    # permitir porcentajes tipo "0,1%" -> "0,1"
+    s = s.replace("%", "").strip()
+    # cambiar coma por punto
+    s = s.replace(",", ".")
+
+    try:
+        return Decimal(s)
+    except Exception:
+        raise ValidationError(f"Valor decimal inválido: {value!r}")
+
+
+def _normalizar_header(nombre: str) -> str:
+    """
+    Normaliza el texto del encabezado a nombres de campo
+    que usamos en la carga masiva.
+    """
+    base = nombre.strip().lower()
+
+    # Limpieza básica
+    base = re.sub(r"\s+", " ", base)
+    base = (
+        base.replace("ó", "o")
+        .replace("í", "i")
+        .replace("á", "a")
+        .replace("é", "e")
+        .replace("ú", "u")
+    )
+
+    if "identificador" in base and "cliente" in base:
+        return "identificador_cliente"
+    if "instrumento" in base:
+        return "instrumento"
+    if base.strip() == "pais":
+        return "pais"
+    if "observacion" in base:
+        return "observaciones"
+
+    # factores: "factor_8", "factor 8", etc.
+    m = re.search(r"factor[_\s]*(\d+)", base)
+    if m:
+        return f"factor_{m.group(1)}"
+
+    # fallback: versión con underscore
+    base = re.sub(r"[^a-z0-9]+", "_", base)
+    base = base.strip("_")
+    return base
+
+
+def _normalizar_row_claves(row: dict) -> dict:
+    """
+    Toma un dict con claves cualquiera (nombres de columnas originales)
+    y devuelve un dict con claves normalizadas usando _normalizar_header.
+    """
+    nuevo = {}
+    for k, v in row.items():
+        if k is None:
+            continue
+        key = _normalizar_header(str(k))
+        nuevo[key] = v
+    return nuevo
+
+
+def _parse_pdf_text_to_rows(file_obj) -> list[dict]:
+    """
+    Lee el PDF como texto y arma filas en base a líneas con '|'.
+    Busca específicamente la fila que contiene 'identificador_cliente'
+    para usarla como encabezado real.
+    """
+    lineas_tabla = []
+
     with pdfplumber.open(file_obj) as pdf:
         for page in pdf.pages:
-            text = page.extract_text() or ""
-            for line in text.splitlines():
-                line = line.strip()
-                if line:
-                    lines.append(line)
+            texto = page.extract_text() or ""
+            for raw in texto.splitlines():
+                linea = raw.strip()
+                if not linea:
+                    continue
+                # Nos interesan sólo líneas estilo tabla con pipes
+                if "|" in linea:
+                    lineas_tabla.append(linea)
 
-    if not lines:
+    if not lineas_tabla:
         return []
 
-    # Buscar la primera línea con separador para usarla como encabezado
-    header_idx = None
-    header_line = None
-    for i, line in enumerate(lines):
-        if any(sep in line for sep in ("|", ";", ",")):
-            header_idx = i
-            header_line = line
+    # 1) Buscar la línea de encabezados REAL (la que contiene identificador_cliente)
+    idx_header = None
+    for idx, linea in enumerate(lineas_tabla):
+        if "identificador_cliente" in linea.lower() and "instrumento" in linea.lower():
+            idx_header = idx
             break
 
-    if header_idx is None or header_line is None:
+    # Si no encontramos ese encabezado, usamos el primero que tenga varias columnas
+    if idx_header is None:
+        for idx, linea in enumerate(lineas_tabla):
+            partes = [p.strip() for p in linea.split("|")]
+            if len([p for p in partes if p]) >= 3:
+                idx_header = idx
+                break
+
+    if idx_header is None:
+        # No hay nada útil
         return []
 
-    separator = None
-    for sep in ("|", ";", ","):
-        if sep in header_line:
-            separator = sep
-            break
+    # 2) Procesar encabezados
+    encabezado_bruto = [c.strip() for c in lineas_tabla[idx_header].split("|")]
+    headers = [_normalizar_header(c) for c in encabezado_bruto]
 
-    if separator is None:
-        return []
+    filas = []
 
-    raw_headers = [h.strip() for h in header_line.split(separator)]
-    headers = [h.lower().replace(" ", "_") for h in raw_headers]
+    # 3) Procesar el resto de líneas como datos
+    for linea in lineas_tabla[idx_header + 1 :]:
+        partes = [p.strip() for p in linea.split("|")]
 
-    data_lines = lines[header_idx + 1 :]
-    rows = []
-
-    for line in data_lines:
-        parts = [p.strip() for p in line.split(separator)]
-        if all(part == "" for part in parts):
+        # Saltar líneas vacías o basura
+        if not any(partes):
             continue
 
-        row_dict = {}
-        for i, header in enumerate(headers):
-            if not header:
-                continue
-            value = parts[i] if i < len(parts) else ""
-            row_dict[header] = value
-        rows.append(row_dict)
+        # Ajustar cantidad de columnas vs headers
+        if len(partes) < len(headers):
+            partes += [""] * (len(headers) - len(partes))
+        elif len(partes) > len(headers):
+            partes = partes[: len(headers)]
 
-    return rows
+        fila_dict = dict(zip(headers, partes))
+
+        # Evitar colar otra fila de encabezado repetida
+        texto_fila = " ".join(partes).lower()
+        if "identificador_cliente" in texto_fila and "instrumento" in texto_fila:
+            continue
+
+        # Si TODO está vacío, no la consideramos
+        if not any(v for v in fila_dict.values()):
+            continue
+
+        filas.append(fila_dict)
+
+    return filas
 
 
-def procesar_archivo_carga(archivo_carga: ArchivoCarga, file_obj) -> None:
-    archivo_carga.started_at = timezone.now()
+def _leer_archivo_a_rows(archivo_carga: ArchivoCarga) -> list[dict]:
+    """
+    Abre el archivo físico y lo convierte a una lista de dicts (rows).
+    Soporta CSV, XLSX/XLS y PDF (siempre por texto).
+    """
+    path = archivo_carga.ruta_almacenamiento
+    ext = os.path.splitext(path)[1].lower()
+
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"No se encontró el archivo en ruta_almacenamiento: {path}")
+
+    rows: list[dict] = []
+
+    with open(path, "rb") as file_obj:
+        if ext == ".csv":
+            df = pd.read_csv(file_obj)
+            rows = df.to_dict(orient="records")
+
+        elif ext in (".xls", ".xlsx"):
+            df = pd.read_excel(file_obj)
+            rows = df.to_dict(orient="records")
+
+        # 3) PDF: usar siempre fallback por texto
+        elif ext == ".pdf":
+            rows_from_text = _parse_pdf_text_to_rows(file_obj)
+            if rows_from_text:
+                rows = rows_from_text
+            else:
+                # devolvemos vacío y que lo maneje el caller
+                return []
+
+        else:
+            raise ValidationError(f"Extensión de archivo no soportada: {ext}")
+
+    # Normalizar claves de todas las filas
+    rows_normalizadas = []
+    for row in rows:
+        rows_normalizadas.append(_normalizar_row_claves(row))
+
+    return rows_normalizadas
+
+
+@transaction.atomic
+def procesar_archivo_carga(archivo_carga: ArchivoCarga) -> None:
+    """
+    Procesa un ArchivoCarga:
+      - Lee el archivo físico
+      - Interpreta filas
+      - Detecta país si no viene explícito
+      - Crea/actualiza CalificacionTributaria
+      - Actualiza resumen y errores en ArchivoCarga
+    """
+    started = timezone.now()
+    archivo_carga.started_at = started
     archivo_carga.estado_proceso = "procesando"
     archivo_carga.save(update_fields=["started_at", "estado_proceso"])
 
-    corredor = archivo_carga.corredor
+    detector = DetectorPaisTributario()
 
-    procesados = 0
-    nuevos = 0
-    actualizados = 0
-    rechazados = 0
-    errores_por_fila = []
-
-    started = timezone.now()
-
-    ext = os.path.splitext(archivo_carga.nombre_original)[1].lower()
-    rows = []
-
-    # 1) CSV
-    if ext == ".csv":
-        df = pd.read_csv(file_obj)
-        rows = df.to_dict(orient="records")
-
-    # 2) Excel
-    elif ext in [".xlsx", ".xls"]:
-        df = pd.read_excel(file_obj)
-        rows = df.to_dict(orient="records")
-
-    # 3) PDF: primero tabla; si no sirve, fallback por texto
-    elif ext == ".pdf":
-        file_obj.seek(0)
-        try:
-            extracted_rows = []
-            usar_fallback_texto = False
-
-            with pdfplumber.open(file_obj) as pdf:
-                for page in pdf.pages:
-                    table = page.extract_table()
-                    if not table:
-                        continue
-
-                    # Si alguna celda tiene '|', asumimos que es texto con separadores,
-                    # no una tabla "real" -> usamos fallback de texto.
-                    hay_pipes = any(
-                        isinstance(cell, str) and "|" in cell
-                        for row in table
-                        for cell in (row or [])
-                        if cell is not None
-                    )
-                    if hay_pipes:
-                        usar_fallback_texto = True
-                        break
-
-                    header, *data_rows = table
-                    if not header:
-                        continue
-
-                    normalized_headers = []
-                    for h in header:
-                        if h is None:
-                            normalized_headers.append("")
-                        else:
-                            normalized_headers.append(
-                                str(h).strip().lower().replace(" ", "_")
-                            )
-
-                    for data in data_rows:
-                        if data is None:
-                            continue
-                        if all(
-                            cell is None or str(cell).strip() == ""
-                            for cell in data
-                        ):
-                            continue
-
-                        row_dict = {}
-                        for i, col_name in enumerate(normalized_headers):
-                            if not col_name:
-                                continue
-                            value = data[i] if i < len(data) else ""
-                            row_dict[col_name] = value
-                        extracted_rows.append(row_dict)
-
-                    if extracted_rows:
-                        # usamos solo la primera tabla con datos
-                        break
-
-            if usar_fallback_texto:
-                rows_from_text = _parse_pdf_text_to_rows(file_obj)
-                if rows_from_text:
-                    rows = rows_from_text
-                else:
-                    finished = timezone.now()
-                    elapsed = (finished - started).total_seconds()
-                    archivo_carga.finished_at = finished
-                    archivo_carga.tiempo_procesamiento_seg = elapsed
-                    archivo_carga.estado_proceso = "error"
-                    archivo_carga.resumen_proceso = {
-                        "total_registros": 0,
-                        "nuevos": 0,
-                        "actualizados": 0,
-                        "rechazados": 0,
-                        "detalle": "No se pudieron interpretar filas desde el PDF (fallback).",
-                    }
-                    archivo_carga.errores_por_fila = []
-                    archivo_carga.save(
-                        update_fields=[
-                            "finished_at",
-                            "tiempo_procesamiento_seg",
-                            "estado_proceso",
-                            "resumen_proceso",
-                            "errores_por_fila",
-                        ]
-                    )
-                    return
-            elif extracted_rows:
-                rows = extracted_rows
-            else:
-                # No hubo tabla útil -> intentar fallback de texto
-                rows_from_text = _parse_pdf_text_to_rows(file_obj)
-                if rows_from_text:
-                    rows = rows_from_text
-                else:
-                    finished = timezone.now()
-                    elapsed = (finished - started).total_seconds()
-                    archivo_carga.finished_at = finished
-                    archivo_carga.tiempo_procesamiento_seg = elapsed
-                    archivo_carga.estado_proceso = "error"
-                    archivo_carga.resumen_proceso = {
-                        "total_registros": 0,
-                        "nuevos": 0,
-                        "actualizados": 0,
-                        "rechazados": 0,
-                        "detalle": "No se encontraron tablas utilizables en el PDF.",
-                    }
-                    archivo_carga.errores_por_fila = []
-                    archivo_carga.save(
-                        update_fields=[
-                            "finished_at",
-                            "tiempo_procesamiento_seg",
-                            "estado_proceso",
-                            "resumen_proceso",
-                            "errores_por_fila",
-                        ]
-                    )
-                    return
-
-        except Exception as e:
-            finished = timezone.now()
-            elapsed = (finished - started).total_seconds()
-            archivo_carga.finished_at = finished
-            archivo_carga.tiempo_procesamiento_seg = elapsed
-            archivo_carga.estado_proceso = "error"
-            archivo_carga.resumen_proceso = {
-                "total_registros": 0,
-                "nuevos": 0,
-                "actualizados": 0,
-                "rechazados": 0,
-                "detalle": f"Error al leer PDF: {str(e)}",
-            }
-            archivo_carga.errores_por_fila = []
-            archivo_carga.save(
-                update_fields=[
-                    "finished_at",
-                    "tiempo_procesamiento_seg",
-                    "estado_proceso",
-                    "resumen_proceso",
-                    "errores_por_fila",
-                ]
-            )
-            return
-
-    # 4) Otros formatos siguen siendo no soportados
-    else:
+    try:
+        rows = _leer_archivo_a_rows(archivo_carga)
+    except Exception as e:
         finished = timezone.now()
         elapsed = (finished - started).total_seconds()
         archivo_carga.finished_at = finished
@@ -355,7 +314,7 @@ def procesar_archivo_carga(archivo_carga: ArchivoCarga, file_obj) -> None:
             "nuevos": 0,
             "actualizados": 0,
             "rechazados": 0,
-            "detalle": f"Formato no soportado para carga masiva: {ext}",
+            "detalle": f"Error al leer archivo: {str(e)}",
         }
         archivo_carga.errores_por_fila = []
         archivo_carga.save(
@@ -369,19 +328,18 @@ def procesar_archivo_carga(archivo_carga: ArchivoCarga, file_obj) -> None:
         )
         return
 
-    # Si por alguna razón no hay filas, marcar como ok sin cambios
     if not rows:
         finished = timezone.now()
         elapsed = (finished - started).total_seconds()
         archivo_carga.finished_at = finished
         archivo_carga.tiempo_procesamiento_seg = elapsed
-        archivo_carga.estado_proceso = "ok"
+        archivo_carga.estado_proceso = "error"
         archivo_carga.resumen_proceso = {
             "total_registros": 0,
             "nuevos": 0,
             "actualizados": 0,
             "rechazados": 0,
-            "detalle": "Archivo leído correctamente pero no se encontraron filas.",
+            "detalle": "No se encontraron filas utilizables en el archivo.",
         }
         archivo_carga.errores_por_fila = []
         archivo_carga.save(
@@ -395,85 +353,93 @@ def procesar_archivo_carga(archivo_carga: ArchivoCarga, file_obj) -> None:
         )
         return
 
-    # Lógica común para CSV, Excel y PDF
-    for idx, row in enumerate(rows, start=2):
-        procesados += 1
-        try:
-            with transaction.atomic():
-                # 1) País manual desde la columna 'pais' si viene
-                pais = None
-                pais_codigo = str(row.get("pais") or "").strip()
-                if pais_codigo:
-                    pais = Pais.objects.filter(codigo_iso3=pais_codigo).first()
+    total_registros = len(rows)
+    nuevos = 0
+    actualizados = 0
+    rechazados = 0
+    errores_por_fila: list[dict] = []
 
-                # 2) Detección automática de país desde la fila
-                iso3_detectado, confianza, _detalle = DetectorPaisTributario.detectar_desde_row(
-                    row
+    factor_fields = [f"factor_{i}" for i in range(8, 20)]
+
+    for index, row in enumerate(rows, start=2):  # asumimos encabezado en fila 1
+        errores = {}
+        data_fila = dict(row)  # copiamos para log
+        fila_numero = index
+
+        identificador_cliente = (row.get("identificador_cliente") or "").strip()
+        instrumento = (row.get("instrumento") or "").strip()
+        observaciones = (row.get("observaciones") or "").strip()
+
+        if not identificador_cliente:
+            errores.setdefault("identificador_cliente", []).append("This field cannot be blank.")
+        if not instrumento:
+            errores.setdefault("instrumento", []).append("This field cannot be blank.")
+
+        # Parseo de factores
+        factores = {}
+        for fname in factor_fields:
+            valor_bruto = row.get(fname, "")
+            try:
+                factores[fname] = _to_decimal(valor_bruto)
+            except ValidationError as e:
+                errores.setdefault(fname, []).append(str(e))
+
+        # Resolución de país
+        pais_obj = None
+        pais_valor = (row.get("pais") or "").strip()
+
+        if pais_valor:
+            # Buscar por código ISO3 o nombre
+            pais_obj = (
+                Pais.objects.filter(codigo_iso3__iexact=pais_valor).first()
+                or Pais.objects.filter(nombre__iexact=pais_valor).first()
+            )
+            if not pais_obj:
+                errores.setdefault("pais", []).append(
+                    f"País '{pais_valor}' no encontrado en tabla Pais."
                 )
-                pais_detectado = None
-                if iso3_detectado:
-                    pais_detectado = Pais.objects.filter(
-                        codigo_iso3__iexact=iso3_detectado
-                    ).first()
-
-                # 3) Crear o recuperar la calificación
-                calif, created = CalificacionTributaria.objects.get_or_create(
-                    corredor=corredor,
-                    identificador_cliente=str(row.get("identificador_cliente") or "").strip(),
-                    instrumento=str(row.get("instrumento") or "").strip(),
-                    defaults={
-                        "moneda": str(row.get("moneda") or "CLP"),
-                        # Prioridad: país del archivo; si no hay, país detectado.
-                        "pais": pais or pais_detectado,
-                        "pais_detectado": pais_detectado,
-                    },
+        else:
+            codigo_iso3, score = detector.detectar(row)
+            if codigo_iso3:
+                pais_obj = Pais.objects.filter(codigo_iso3__iexact=codigo_iso3).first()
+            if not pais_obj:
+                errores.setdefault("pais", []).append(
+                    "No se pudo determinar el país a partir de los datos."
                 )
 
-                # 4) Actualizar campos base
-                calif.moneda = str(row.get("moneda") or calif.moneda or "CLP")
-                calif.pais = pais or pais_detectado or calif.pais
-                calif.pais_detectado = pais_detectado or calif.pais_detectado
-                calif.archivo_origen = archivo_carga
-                calif.observaciones = row.get("observaciones") or ""
-
-                # 5) Factores 8–19
-                for n in range(8, 20):
-                    field_name = f"factor_{n}"
-                    raw = row.get(field_name, "")
-                    if raw is None or raw == "":
-                        value = Decimal("0")
-                    else:
-                        try:
-                            value = Decimal(str(raw).replace(",", "."))
-                        except Exception:
-                            value = Decimal("0")
-                    setattr(calif, field_name, value)
-
-                calif.save()
-
-                if created:
-                    nuevos += 1
-                else:
-                    actualizados += 1
-
-        except ValidationError as ve:
+        if errores:
             rechazados += 1
             errores_por_fila.append(
                 {
-                    "fila": idx,
-                    "error": ve.message_dict if hasattr(ve, "message_dict") else str(ve),
-                    "data": row,
+                    "fila": fila_numero,
+                    "error": errores,
+                    "data": data_fila,
                 }
             )
-        except Exception as exc:
-            rechazados += 1
-            errores_por_fila.append(
-                {
-                    "fila": idx,
-                    "error": str(exc),
-                    "data": row,
-                }
-            )
+            continue
+
+        # Crear / actualizar CalificacionTributaria
+        # Clave lógica: corredor + identificador_cliente + instrumento
+        calif, created = CalificacionTributaria.objects.get_or_create(
+            corredor=archivo_carga.corredor,
+            identificador_cliente=identificador_cliente,
+            instrumento=instrumento,
+            defaults={
+                "pais": pais_obj,
+                "observaciones": observaciones,
+                **factores,
+            },
+        )
+
+        if created:
+            nuevos += 1
+        else:
+            calif.pais = pais_obj
+            calif.observaciones = observaciones
+            for k, v in factores.items():
+                setattr(calif, k, v)
+            calif.save()
+            actualizados += 1
 
     finished = timezone.now()
     elapsed = (finished - started).total_seconds()
@@ -482,7 +448,7 @@ def procesar_archivo_carga(archivo_carga: ArchivoCarga, file_obj) -> None:
     archivo_carga.tiempo_procesamiento_seg = elapsed
     archivo_carga.estado_proceso = "ok" if rechazados == 0 else "error"
     archivo_carga.resumen_proceso = {
-        "total_registros": procesados,
+        "total_registros": total_registros,
         "nuevos": nuevos,
         "actualizados": actualizados,
         "rechazados": rechazados,
