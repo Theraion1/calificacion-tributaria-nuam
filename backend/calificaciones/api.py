@@ -5,6 +5,7 @@ from rest_framework.response import Response
 from rest_framework.exceptions import PermissionDenied
 
 from django.core.files.storage import default_storage
+from django.db.models import Q  # <- NUEVO IMPORT
 
 from .models import (
     Pais,
@@ -116,18 +117,71 @@ class CalificacionTributariaViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         user = self.request.user
         qs = CalificacionTributaria.objects.select_related("corredor", "pais").all()
+
+        # 1) Seguridad / segregación por corredor y rol
         if not user.is_authenticated:
             return qs.none()
+
         if user.is_superuser or user.is_staff:
-            return qs
-        perfil = getattr(user, "perfil", None)
-        if not perfil:
-            return qs.none()
-        if perfil.rol == "corredor":
-            return qs.filter(corredor=perfil.corredor)
-        if perfil.rol == "auditor":
-            return qs
-        return qs.none()
+            # staff ve todo, sin filtro por corredor
+            pass
+        else:
+            perfil = getattr(user, "perfil", None)
+            if not perfil:
+                return qs.none()
+
+            if perfil.rol == "corredor":
+                qs = qs.filter(corredor=perfil.corredor)
+            elif perfil.rol == "auditor":
+                # auditor ve todo
+                pass
+            else:
+                return qs.none()
+
+        # 2) Filtros por query params (búsqueda avanzada)
+        params = self.request.query_params
+
+        # filtros específicos
+        pais_id = params.get("pais_id")              # ej: ?pais_id=1
+        instrumento = params.get("instrumento")      # ej: ?instrumento=ACCION
+        cliente = params.get("cliente")              # ej: ?cliente=12345678
+        moneda = params.get("moneda")                # ej: ?moneda=CLP
+        search = params.get("search")                # búsqueda general
+        creado_desde = params.get("creado_desde")    # ej: ?creado_desde=2025-11-01
+        creado_hasta = params.get("creado_hasta")    # ej: ?creado_hasta=2025-11-30
+
+        if pais_id:
+            qs = qs.filter(pais_id=pais_id)
+
+        # solo staff puede filtrar por corredor arbitrario
+        corredor_id = params.get("corredor_id")
+        if corredor_id and (user.is_superuser or user.is_staff):
+            qs = qs.filter(corredor_id=corredor_id)
+
+        if instrumento:
+            qs = qs.filter(instrumento__icontains=instrumento)
+
+        if cliente:
+            qs = qs.filter(identificador_cliente__icontains=cliente)
+
+        if moneda:
+            qs = qs.filter(moneda__iexact=moneda)
+
+        if search:
+            qs = qs.filter(
+                Q(instrumento__icontains=search)
+                | Q(identificador_cliente__icontains=search)
+                | Q(observaciones__icontains=search)
+            )
+
+        if creado_desde:
+            qs = qs.filter(creado_en__date__gte=creado_desde)
+
+        if creado_hasta:
+            qs = qs.filter(creado_en__date__lte=creado_hasta)
+
+        # orden por defecto: las más nuevas primero
+        return qs.order_by("-creado_en")
 
     def perform_create(self, serializer):
         user = self.request.user
