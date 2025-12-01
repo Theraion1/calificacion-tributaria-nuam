@@ -107,6 +107,59 @@ class DetectorPaisTributario:
         return iso3_detectado, confianza, resultados
 
 
+def _parse_pdf_text_to_rows(file_obj):
+    """
+    Fallback para PDFs sin tabla explícita:
+    - Lee el texto de todas las páginas.
+    - Usa la primera línea como encabezado.
+    - Detecta separador (|, ;, ,) y arma filas.
+    Devuelve lista de dicts o [] si no se pudo interpretar.
+    """
+    file_obj.seek(0)
+    lines = []
+    with pdfplumber.open(file_obj) as pdf:
+        for page in pdf.pages:
+            text = page.extract_text() or ""
+            for line in text.splitlines():
+                line = line.strip()
+                if line:
+                    lines.append(line)
+
+    if not lines:
+        return []
+
+    header_line = lines[0]
+    separator = None
+    for sep in ("|", ";", ","):
+        if sep in header_line:
+            separator = sep
+            break
+
+    if separator is None:
+        return []
+
+    raw_headers = [h.strip() for h in header_line.split(separator)]
+    headers = [h.lower().replace(" ", "_") for h in raw_headers]
+
+    data_lines = lines[1:]
+    rows = []
+
+    for line in data_lines:
+        parts = [p.strip() for p in line.split(separator)]
+        if all(part == "" for part in parts):
+            continue
+
+        row_dict = {}
+        for i, header in enumerate(headers):
+            if not header:
+                continue
+            value = parts[i] if i < len(parts) else ""
+            row_dict[header] = value
+        rows.append(row_dict)
+
+    return rows
+
+
 def procesar_archivo_carga(archivo_carga: ArchivoCarga, file_obj) -> None:
     archivo_carga.started_at = timezone.now()
     archivo_carga.estado_proceso = "procesando"
@@ -135,7 +188,7 @@ def procesar_archivo_carga(archivo_carga: ArchivoCarga, file_obj) -> None:
         df = pd.read_excel(file_obj)
         rows = df.to_dict(orient="records")
 
-    # 3) PDF: leemos la primera tabla utilizable
+    # 3) PDF: primero tabla; si no, fallback por texto
     elif ext == ".pdf":
         file_obj.seek(0)
         try:
@@ -147,12 +200,10 @@ def procesar_archivo_carga(archivo_carga: ArchivoCarga, file_obj) -> None:
                     if not table:
                         continue
 
-                    # Primera fila = cabecera
                     header, *data_rows = table
                     if not header:
                         continue
 
-                    # Normalizar nombres de columnas
                     normalized_headers = []
                     for h in header:
                         if h is None:
@@ -162,11 +213,9 @@ def procesar_archivo_carga(archivo_carga: ArchivoCarga, file_obj) -> None:
                                 str(h).strip().lower().replace(" ", "_")
                             )
 
-                    # Construir diccionarios fila por fila
                     for data in data_rows:
                         if data is None:
                             continue
-                        # saltar filas completamente vacías
                         if all(
                             cell is None or str(cell).strip() == ""
                             for cell in data
@@ -182,35 +231,39 @@ def procesar_archivo_carga(archivo_carga: ArchivoCarga, file_obj) -> None:
                         extracted_rows.append(row_dict)
 
                     if extracted_rows:
-                        # usamos solo la primera tabla con datos
                         break
 
-            if not extracted_rows:
-                finished = timezone.now()
-                elapsed = (finished - started).total_seconds()
-                archivo_carga.finished_at = finished
-                archivo_carga.tiempo_procesamiento_seg = elapsed
-                archivo_carga.estado_proceso = "error"
-                archivo_carga.resumen_proceso = {
-                    "total_registros": 0,
-                    "nuevos": 0,
-                    "actualizados": 0,
-                    "rechazados": 0,
-                    "detalle": "No se encontraron tablas utilizables en el PDF.",
-                }
-                archivo_carga.errores_por_fila = []
-                archivo_carga.save(
-                    update_fields=[
-                        "finished_at",
-                        "tiempo_procesamiento_seg",
-                        "estado_proceso",
-                        "resumen_proceso",
-                        "errores_por_fila",
-                    ]
-                )
-                return
-
-            rows = extracted_rows
+            if extracted_rows:
+                rows = extracted_rows
+            else:
+                # Fallback: intentar interpretar texto plano como tabla
+                rows_from_text = _parse_pdf_text_to_rows(file_obj)
+                if rows_from_text:
+                    rows = rows_from_text
+                else:
+                    finished = timezone.now()
+                    elapsed = (finished - started).total_seconds()
+                    archivo_carga.finished_at = finished
+                    archivo_carga.tiempo_procesamiento_seg = elapsed
+                    archivo_carga.estado_proceso = "error"
+                    archivo_carga.resumen_proceso = {
+                        "total_registros": 0,
+                        "nuevos": 0,
+                        "actualizados": 0,
+                        "rechazados": 0,
+                        "detalle": "No se encontraron tablas utilizables en el PDF.",
+                    }
+                    archivo_carga.errores_por_fila = []
+                    archivo_carga.save(
+                        update_fields=[
+                            "finished_at",
+                            "tiempo_procesamiento_seg",
+                            "estado_proceso",
+                            "resumen_proceso",
+                            "errores_por_fila",
+                        ]
+                    )
+                    return
 
         except Exception as e:
             finished = timezone.now()
@@ -301,7 +354,9 @@ def procesar_archivo_carga(archivo_carga: ArchivoCarga, file_obj) -> None:
                     pais = Pais.objects.filter(codigo_iso3=pais_codigo).first()
 
                 # 2) Detección automática de país desde la fila
-                iso3_detectado, confianza, _detalle = DetectorPaisTributario.detectar_desde_row(row)
+                iso3_detectado, confianza, _detalle = DetectorPaisTributario.detectar_desde_row(
+                    row
+                )
                 pais_detectado = None
                 if iso3_detectado:
                     pais_detectado = Pais.objects.filter(
