@@ -11,7 +11,7 @@ from django.utils import timezone
 from .models import ArchivoCarga, CalificacionTributaria, Pais
 
 
-class DetectorPaisTributario:
+class DetectorPaisTributario(object):
     """
     Detección simple de país a partir de los datos de una fila.
     Usa patrones de identificadores (RUT/NIT/RUC) y palabras clave.
@@ -31,13 +31,13 @@ class DetectorPaisTributario:
             "regex": [
                 r"\d{3}\.\d{3}\.\d{3}-\d",  # NIT 123.456.789-0
             ],
-            "keywords": ["COLOMBIA", "COLOMBIA", "BOGOTA", "NIT"],
+            "keywords": ["COLOMBIA", "BOGOTA", "NIT"],
             "score_regex": 0.7,
             "score_keyword": 0.2,
         },
         "PER": {
             "regex": [
-                r"2\d{10}",  # RUC Perú: 11 dígitos y suele empezar con 10, 20, 2x...
+                r"2\d{10}",  # RUC Perú, ejemplo simple
             ],
             "keywords": ["PERU", "LIMA", "RUC"],
             "score_regex": 0.7,
@@ -45,12 +45,11 @@ class DetectorPaisTributario:
         },
     }
 
-    def detectar(self, row: dict) -> tuple[str | None, float]:
+    def detectar(self, row):
         """
         Recibe una fila (dict) y devuelve (codigo_iso3, score).
         Si no detecta nada, devuelve (None, 0.0).
         """
-        # Unimos todos los valores de la fila como texto grande
         textos = []
         for v in row.values():
             if v is None:
@@ -82,13 +81,10 @@ class DetectorPaisTributario:
         return mejor_codigo, mejor_score
 
 
-def _to_decimal(value) -> Decimal | None:
+def _to_decimal(value):
     """
     Convierte distintos formatos a Decimal.
-    Acepta:
-      - "", None -> None
-      - "0.1", "0,1", "0,10", 0.1, 1, etc.
-    Lanza ValidationError si no se puede interpretar.
+    Acepta: "", None -> None; "0.1", "0,1", 0.1, 1, etc.
     """
     if value is None:
         return None
@@ -103,25 +99,21 @@ def _to_decimal(value) -> Decimal | None:
     if s == "":
         return None
 
-    # permitir porcentajes tipo "0,1%" -> "0,1"
     s = s.replace("%", "").strip()
-    # cambiar coma por punto
     s = s.replace(",", ".")
 
     try:
         return Decimal(s)
     except Exception:
-        raise ValidationError(f"Valor decimal inválido: {value!r}")
+        raise ValidationError("Valor decimal inválido: %r" % value)
 
 
-def _normalizar_header(nombre: str) -> str:
+def _normalizar_header(nombre):
     """
     Normaliza el texto del encabezado a nombres de campo
     que usamos en la carga masiva.
     """
     base = nombre.strip().lower()
-
-    # Limpieza básica
     base = re.sub(r"\s+", " ", base)
     base = (
         base.replace("ó", "o")
@@ -140,18 +132,16 @@ def _normalizar_header(nombre: str) -> str:
     if "observacion" in base:
         return "observaciones"
 
-    # factores: "factor_8", "factor 8", etc.
     m = re.search(r"factor[_\s]*(\d+)", base)
     if m:
-        return f"factor_{m.group(1)}"
+        return "factor_%s" % m.group(1)
 
-    # fallback: versión con underscore
     base = re.sub(r"[^a-z0-9]+", "_", base)
     base = base.strip("_")
     return base
 
 
-def _normalizar_row_claves(row: dict) -> dict:
+def _normalizar_row_claves(row):
     """
     Toma un dict con claves cualquiera (nombres de columnas originales)
     y devuelve un dict con claves normalizadas usando _normalizar_header.
@@ -165,7 +155,7 @@ def _normalizar_row_claves(row: dict) -> dict:
     return nuevo
 
 
-def _parse_pdf_text_to_rows(file_obj) -> list[dict]:
+def _parse_pdf_text_to_rows(file_obj):
     """
     Lee el PDF como texto y arma filas en base a líneas con '|'.
     Busca específicamente la fila que contiene 'identificador_cliente'
@@ -180,21 +170,18 @@ def _parse_pdf_text_to_rows(file_obj) -> list[dict]:
                 linea = raw.strip()
                 if not linea:
                     continue
-                # Nos interesan sólo líneas estilo tabla con pipes
                 if "|" in linea:
                     lineas_tabla.append(linea)
 
     if not lineas_tabla:
         return []
 
-    # 1) Buscar la línea de encabezados REAL (la que contiene identificador_cliente)
     idx_header = None
     for idx, linea in enumerate(lineas_tabla):
         if "identificador_cliente" in linea.lower() and "instrumento" in linea.lower():
             idx_header = idx
             break
 
-    # Si no encontramos ese encabezado, usamos el primero que tenga varias columnas
     if idx_header is None:
         for idx, linea in enumerate(lineas_tabla):
             partes = [p.strip() for p in linea.split("|")]
@@ -203,24 +190,19 @@ def _parse_pdf_text_to_rows(file_obj) -> list[dict]:
                 break
 
     if idx_header is None:
-        # No hay nada útil
         return []
 
-    # 2) Procesar encabezados
     encabezado_bruto = [c.strip() for c in lineas_tabla[idx_header].split("|")]
     headers = [_normalizar_header(c) for c in encabezado_bruto]
 
     filas = []
 
-    # 3) Procesar el resto de líneas como datos
     for linea in lineas_tabla[idx_header + 1 :]:
         partes = [p.strip() for p in linea.split("|")]
 
-        # Saltar líneas vacías o basura
         if not any(partes):
             continue
 
-        # Ajustar cantidad de columnas vs headers
         if len(partes) < len(headers):
             partes += [""] * (len(headers) - len(partes))
         elif len(partes) > len(headers):
@@ -228,12 +210,10 @@ def _parse_pdf_text_to_rows(file_obj) -> list[dict]:
 
         fila_dict = dict(zip(headers, partes))
 
-        # Evitar colar otra fila de encabezado repetida
         texto_fila = " ".join(partes).lower()
         if "identificador_cliente" in texto_fila and "instrumento" in texto_fila:
             continue
 
-        # Si TODO está vacío, no la consideramos
         if not any(v for v in fila_dict.values()):
             continue
 
@@ -242,7 +222,7 @@ def _parse_pdf_text_to_rows(file_obj) -> list[dict]:
     return filas
 
 
-def _leer_archivo_a_rows(archivo_carga: ArchivoCarga) -> list[dict]:
+def _leer_archivo_a_rows(archivo_carga):
     """
     Abre el archivo físico y lo convierte a una lista de dicts (rows).
     Soporta CSV, XLSX/XLS y PDF (siempre por texto).
@@ -251,9 +231,11 @@ def _leer_archivo_a_rows(archivo_carga: ArchivoCarga) -> list[dict]:
     ext = os.path.splitext(path)[1].lower()
 
     if not os.path.exists(path):
-        raise FileNotFoundError(f"No se encontró el archivo en ruta_almacenamiento: {path}")
+        raise FileNotFoundError(
+            "No se encontró el archivo en ruta_almacenamiento: %s" % path
+        )
 
-    rows: list[dict] = []
+    rows = []
 
     with open(path, "rb") as file_obj:
         if ext == ".csv":
@@ -264,19 +246,15 @@ def _leer_archivo_a_rows(archivo_carga: ArchivoCarga) -> list[dict]:
             df = pd.read_excel(file_obj)
             rows = df.to_dict(orient="records")
 
-        # 3) PDF: usar siempre fallback por texto
         elif ext == ".pdf":
             rows_from_text = _parse_pdf_text_to_rows(file_obj)
             if rows_from_text:
                 rows = rows_from_text
             else:
-                # devolvemos vacío y que lo maneje el caller
                 return []
-
         else:
-            raise ValidationError(f"Extensión de archivo no soportada: {ext}")
+            raise ValidationError("Extensión de archivo no soportada: %s" % ext)
 
-    # Normalizar claves de todas las filas
     rows_normalizadas = []
     for row in rows:
         rows_normalizadas.append(_normalizar_row_claves(row))
@@ -285,7 +263,7 @@ def _leer_archivo_a_rows(archivo_carga: ArchivoCarga) -> list[dict]:
 
 
 @transaction.atomic
-def procesar_archivo_carga(archivo_carga: ArchivoCarga) -> None:
+def procesar_archivo_carga(archivo_carga):
     """
     Procesa un ArchivoCarga:
       - Lee el archivo físico
@@ -314,7 +292,7 @@ def procesar_archivo_carga(archivo_carga: ArchivoCarga) -> None:
             "nuevos": 0,
             "actualizados": 0,
             "rechazados": 0,
-            "detalle": f"Error al leer archivo: {str(e)}",
+            "detalle": "Error al leer archivo: %s" % str(e),
         }
         archivo_carga.errores_por_fila = []
         archivo_carga.save(
@@ -357,13 +335,13 @@ def procesar_archivo_carga(archivo_carga: ArchivoCarga) -> None:
     nuevos = 0
     actualizados = 0
     rechazados = 0
-    errores_por_fila: list[dict] = []
+    errores_por_fila = []
 
-    factor_fields = [f"factor_{i}" for i in range(8, 20)]
+    factor_fields = ["factor_%d" % i for i in range(8, 20)]
 
-    for index, row in enumerate(rows, start=2):  # asumimos encabezado en fila 1
+    for index, row in enumerate(rows, start=2):
         errores = {}
-        data_fila = dict(row)  # copiamos para log
+        data_fila = dict(row)
         fila_numero = index
 
         identificador_cliente = (row.get("identificador_cliente") or "").strip()
@@ -371,11 +349,14 @@ def procesar_archivo_carga(archivo_carga: ArchivoCarga) -> None:
         observaciones = (row.get("observaciones") or "").strip()
 
         if not identificador_cliente:
-            errores.setdefault("identificador_cliente", []).append("This field cannot be blank.")
+            errores.setdefault("identificador_cliente", []).append(
+                "This field cannot be blank."
+            )
         if not instrumento:
-            errores.setdefault("instrumento", []).append("This field cannot be blank.")
+            errores.setdefault("instrumento", []).append(
+                "This field cannot be blank."
+            )
 
-        # Parseo de factores
         factores = {}
         for fname in factor_fields:
             valor_bruto = row.get(fname, "")
@@ -384,19 +365,17 @@ def procesar_archivo_carga(archivo_carga: ArchivoCarga) -> None:
             except ValidationError as e:
                 errores.setdefault(fname, []).append(str(e))
 
-        # Resolución de país
         pais_obj = None
         pais_valor = (row.get("pais") or "").strip()
 
         if pais_valor:
-            # Buscar por código ISO3 o nombre
             pais_obj = (
                 Pais.objects.filter(codigo_iso3__iexact=pais_valor).first()
                 or Pais.objects.filter(nombre__iexact=pais_valor).first()
             )
             if not pais_obj:
                 errores.setdefault("pais", []).append(
-                    f"País '{pais_valor}' no encontrado en tabla Pais."
+                    "País '%s' no encontrado en tabla Pais." % pais_valor
                 )
         else:
             codigo_iso3, score = detector.detectar(row)
@@ -418,17 +397,15 @@ def procesar_archivo_carga(archivo_carga: ArchivoCarga) -> None:
             )
             continue
 
-        # Crear / actualizar CalificacionTributaria
-        # Clave lógica: corredor + identificador_cliente + instrumento
         calif, created = CalificacionTributaria.objects.get_or_create(
             corredor=archivo_carga.corredor,
             identificador_cliente=identificador_cliente,
             instrumento=instrumento,
-            defaults={
-                "pais": pais_obj,
-                "observaciones": observaciones,
-                **factores,
-            },
+            defaults=dict(
+                pais=pais_obj,
+                observaciones=observaciones,
+                **factores
+            ),
         )
 
         if created:
