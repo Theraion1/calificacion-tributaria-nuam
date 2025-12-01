@@ -1,12 +1,1 @@
-Django==5.0.6
-djangorestframework==3.15.1
-PyMySQL
-python-dotenv==1.0.1
-gunicorn==22.0.0
-whitenoise==6.7.0
-cryptography
-pandas
-openpyxl
-xlrd
-pdfplumber
-djangorestframework-simplejwt
+Django==5.0.6djangorestframeworkPyMySQLpython-dotenv==1.0.1gunicorn==22.0.0whitenoise==6.7.0cryptographypandasopenpyxlxlrdpdfplumberdjangorestframework-simplejwt  

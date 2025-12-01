@@ -1,5 +1,7 @@
 from django.contrib.auth import get_user_model
 from rest_framework import serializers
+from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
+
 from .models import (
     Pais,
     Corredor,
@@ -49,10 +51,10 @@ class RegistroCorredorSerializer(serializers.Serializer):
     password = serializers.CharField(write_only=True, min_length=8)
     nombre_usuario = serializers.CharField(max_length=150)
 
-    # OPCIÓN 1: usar corredor existente
+    # Opción 1: usar corredor existente
     corredor_id = serializers.IntegerField(required=False)
 
-    # OPCIÓN 2: crear corredor nuevo
+    # Opción 2: crear corredor nuevo
     nombre_corredor = serializers.CharField(max_length=150, required=False)
     codigo_interno = serializers.CharField(max_length=50, required=False)
     pais_id = serializers.IntegerField(required=False)
@@ -75,14 +77,14 @@ class RegistroCorredorSerializer(serializers.Serializer):
                     {"corredor_id": "No existe un corredor con ese ID."}
                 )
         else:
-            # Si NO viene corredor_id → obligamos a mandar datos del corredor nuevo
+            # Si no viene corredor_id → obligamos a mandar datos del corredor nuevo
             if not (nombre_corredor and codigo_interno and pais_id):
                 raise serializers.ValidationError(
                     "Debes enviar 'corredor_id' o bien "
                     "'nombre_corredor', 'codigo_interno' y 'pais_id' para crear un corredor nuevo."
                 )
 
-            # Validar código interno único SOLO cuando se crea corredor
+            # Validar código interno único solo cuando se crea corredor
             if Corredor.objects.filter(codigo_interno=codigo_interno).exists():
                 raise serializers.ValidationError(
                     "Ese código interno de corredor ya existe."
@@ -122,7 +124,7 @@ class RegistroCorredorSerializer(serializers.Serializer):
         # 3) Crear perfil
         perfil = UsuarioPerfil.objects.create(
             user=user,
-            nombre=nombre_usuario,   # campo 'nombre' de tu modelo
+            nombre=nombre_usuario,
             rol="corredor",
             corredor=corredor,
         )
@@ -152,3 +154,38 @@ class UsuarioPerfilSerializer(serializers.ModelSerializer):
 
 class CambiarRolSerializer(serializers.Serializer):
     rol = serializers.ChoiceField(choices=["admin", "corredor", "auditor"])
+
+
+class CustomTokenSerializer(TokenObtainPairSerializer):
+    @classmethod
+    def get_token(cls, user):
+        token = super().get_token(user)
+        token["username"] = user.username
+        token["email"] = user.email
+
+        perfil = getattr(user, "usuarioperfil", None)
+        if perfil:
+            token["rol"] = perfil.rol
+            token["corredor_id"] = perfil.corredor_id
+
+        return token
+
+    def validate(self, attrs):
+        data = super().validate(attrs)
+
+        user = self.user
+        perfil = getattr(user, "usuarioperfil", None)
+
+        data["user"] = {
+            "id": user.id,
+            "username": user.username,
+            "email": user.email,
+            "is_staff": user.is_staff,
+            "perfil": {
+                "id": getattr(perfil, "id", None),
+                "rol": getattr(perfil, "rol", None),
+                "corredor_id": getattr(perfil, "corredor_id", None),
+            } if perfil else None,
+        }
+
+        return data

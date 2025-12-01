@@ -3,3 +3,4 @@ from .serializers import CustomTokenSerializer
 
 class LoginAPI(TokenObtainPairView):
     serializer_class = CustomTokenSerializer
+    
