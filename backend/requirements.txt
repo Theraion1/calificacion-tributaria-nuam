@@ -8,3 +8,4 @@ cryptography
 pandas
 openpyxl
 xlrd
+pdfplumber
