@@ -305,6 +305,7 @@ def procesar_archivo_carga(archivo_carga):
     try:
         rows = _leer_archivo_a_rows(archivo_carga)
 
+        # Si no se obtienen filas utilizables
         if not rows:
             finished = timezone.now()
             elapsed = (finished - started).total_seconds()
@@ -347,6 +348,7 @@ def procesar_archivo_carga(archivo_carga):
             instrumento = (row.get("instrumento") or "").strip()
             observaciones = (row.get("observaciones") or "").strip()
 
+            # Validaciones básicas
             if not identificador_cliente:
                 errores.setdefault("identificador_cliente", []).append(
                     "This field cannot be blank."
@@ -356,14 +358,24 @@ def procesar_archivo_carga(archivo_carga):
                     "This field cannot be blank."
                 )
 
+            # Procesar factores 8–19
             factores = {}
             for fname in factor_fields:
                 valor_bruto = row.get(fname, "")
+
                 try:
-                    factores[fname] = _to_decimal(valor_bruto)
+                    valor = _to_decimal(valor_bruto)
+
+                    # FIX: si _to_decimal devuelve None => usar 0
+                    if valor is None:
+                        valor = Decimal("0")
+
+                    factores[fname] = valor
+
                 except ValidationError as e:
                     errores.setdefault(fname, []).append(str(e))
 
+            # Determinar país (explícito o por detección)
             pais_obj = None
             pais_valor = (row.get("pais") or "").strip()
 
@@ -387,6 +399,7 @@ def procesar_archivo_carga(archivo_carga):
                         "No se pudo determinar el país a partir de los datos."
                     )
 
+            # Si hay errores en la fila, se rechaza
             if errores:
                 rechazados += 1
                 errores_por_fila.append(
@@ -398,6 +411,7 @@ def procesar_archivo_carga(archivo_carga):
                 )
                 continue
 
+            # Crear / actualizar calificación
             calif, created = CalificacionTributaria.objects.get_or_create(
                 corredor=archivo_carga.corredor,
                 identificador_cliente=identificador_cliente,
@@ -421,6 +435,7 @@ def procesar_archivo_carga(archivo_carga):
                 calif.save()
                 actualizados += 1
 
+        # Fin del procesamiento OK (con o sin rechazados)
         finished = timezone.now()
         elapsed = (finished - started).total_seconds()
 
@@ -445,6 +460,7 @@ def procesar_archivo_carga(archivo_carga):
         )
 
     except Exception as e:
+        # Cualquier error inesperado
         finished = timezone.now()
         elapsed = (finished - started).total_seconds()
         archivo_carga.finished_at = finished
@@ -467,6 +483,7 @@ def procesar_archivo_carga(archivo_carga):
                 "errores_por_fila",
             ]
         )
-        # importante: no relanzamos la excepción
+        # No relanzamos la excepción para que la vista pueda seguir
         return
+
 
