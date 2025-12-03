@@ -5,7 +5,6 @@ from decimal import Decimal
 import pandas as pd
 import pdfplumber
 from django.core.exceptions import ValidationError
-from django.db import transaction
 from django.utils import timezone
 
 from .models import ArchivoCarga, CalificacionTributaria, Pais
@@ -281,7 +280,6 @@ def _leer_archivo_a_rows(archivo_carga):
     return rows_normalizadas
 
 
-@transaction.atomic
 def procesar_archivo_carga(archivo_carga):
     """
     Procesa un ArchivoCarga:
@@ -469,4 +467,6 @@ def procesar_archivo_carga(archivo_carga):
                 "errores_por_fila",
             ]
         )
-        raise
+        # importante: no relanzamos la excepción
+        return
+
