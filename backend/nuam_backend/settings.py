@@ -31,12 +31,17 @@ allowed_hosts_env = os.getenv("DJANGO_ALLOWED_HOSTS", "")
 if allowed_hosts_env:
     ALLOWED_HOSTS = [h.strip() for h in allowed_hosts_env.split(",") if h.strip()]
 else:
-    ALLOWED_HOSTS = ["localhost", "127.0.0.1"]
+    ALLOWED_HOSTS = ["localhost", 
+    "127.0.0.1",
+    "api.raioncore.com",    # ===== Este tambien hay que agregar========
+    "nuam.raioncore.com",   # ===== Este tambien hay que agregar========
+    "raioncore.com",        # ===== Este tambien hay que agregar========
+    "www.raioncore.com",]   # ===== Este tambien hay que agregar========
 
 CSRF_TRUSTED_ORIGINS = [
     "https://api.raioncore.com",
+    "https://nuam.raioncore.com",  # ===== Este tambien hay que agregar========
 ]
-
 
 # =========================
 # Apps
@@ -52,6 +57,7 @@ INSTALLED_APPS = [
     "rest_framework",
     'rest_framework_simplejwt',
     "calificaciones",
+    "corsheaders",
 ]
 
 
@@ -60,6 +66,7 @@ INSTALLED_APPS = [
 # =========================
 
 MIDDLEWARE = [
+    "corsheaders.middleware.CorsMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
@@ -177,7 +184,13 @@ SIMPLE_JWT = {
     "AUTH_HEADER_TYPES": ("Bearer",),
 }
 
+CORS_ALLOWED_ORIGINS = [             # ===== Este tambien hay que agregar========
+    "https://nuam.raioncore.com",    # ===== Este tambien hay que agregar========
+    "https://raioncore.com",         # ===== Este tambien hay que agregar========
+    "https://www.raioncore.com",     # ===== Este tambien hay que agregar========
+]                                    # ===== Este tambien hay que agregar========
 
+CORS_ALLOW_CREDENTIALS = True        # ===== Este tambien hay que agregar========
 # =========================
 # Primary key
 # =========================
