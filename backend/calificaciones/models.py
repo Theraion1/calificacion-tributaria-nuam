@@ -173,32 +173,37 @@ class CalificacionTributaria(TimeStampedModel):
         return f"{self.identificador_cliente} - {self.instrumento} ({self.pais})"
 
     def suma_factores(self) -> Decimal:
-        return sum(
-            [
-                self.factor_8,
-                self.factor_9,
-                self.factor_10,
-                self.factor_11,
-                self.factor_12,
-                self.factor_13,
-                self.factor_14,
-                self.factor_15,
-                self.factor_16,
-                self.factor_17,
-                self.factor_18,
-                self.factor_19,
-            ]
-        )
+        """
+        Suma los factores 8–19 tratando None como 0 para evitar errores
+        de Decimal + None.
+        """
+        valores = [
+            self.factor_8,
+            self.factor_9,
+            self.factor_10,
+            self.factor_11,
+            self.factor_12,
+            self.factor_13,
+            self.factor_14,
+            self.factor_15,
+            self.factor_16,
+            self.factor_17,
+            self.factor_18,
+            self.factor_19,
+        ]
+        valores_limpios = [v if v is not None else Decimal("0") for v in valores]
+        return sum(valores_limpios, Decimal("0"))
 
     def clean(self):
         super().clean()
         if self.suma_factores() > Decimal("1"):
-            raise ValidationError({"__all__": "La suma de los factores 8–19 no puede ser mayor a 1."})
+            raise ValidationError(
+                {"__all__": "La suma de los factores 8–19 no puede ser mayor a 1."}
+            )
 
     def save(self, *args, **kwargs):
         self.full_clean()
         return super().save(*args, **kwargs)
-
 
 class HistorialCalificacion(TimeStampedModel):
     calificacion = models.ForeignKey(
