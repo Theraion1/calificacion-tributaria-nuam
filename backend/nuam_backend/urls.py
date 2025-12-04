@@ -25,7 +25,9 @@ router = DefaultRouter()
 router.register("paises", PaisViewSet, basename="pais")
 router.register("corredores", CorredorViewSet, basename="corredor")
 router.register(
-    "calificaciones", CalificacionTributariaViewSet, basename="calificacion-tributaria"
+    "calificaciones",
+    CalificacionTributariaViewSet,
+    basename="calificacion-tributaria",
 )
 router.register("jobs-carga", ArchivoCargaViewSet, basename="archivo-carga")
 router.register(
@@ -37,24 +39,21 @@ router.register(
 urlpatterns = [
     path("admin/", admin.site.urls),
 
+    # ======================
     # Autenticación JWT
+    # ======================
     path("api/auth/login/", LoginAPI.as_view(), name="jwt_login"),
-    path("api/login/", LoginAPI.as_view(), name="jwt_login_legacy"),  # alias extra
     path("api/auth/refresh/", TokenRefreshView.as_view(), name="token_refresh"),
 
+    # ======================
     # Endpoints auxiliares
-    path(
-        "api/registro-corredor/",
-        RegistroCorredorView.as_view(),
-        name="registro-corredor",
-    ),
+    # ======================
+    path("api/registro-corredor/", RegistroCorredorView.as_view(), name="registro-corredor"),
     path("api/whoami/", WhoAmIView.as_view(), name="whoami"),
-    path(
-        "api/usuarios/<int:usuario_id>/cambiar-rol/",
-        CambiarRolView.as_view(),
-        name="cambiar-rol",
-    ),
+    path("api/usuarios/<int:usuario_id>/cambiar-rol/", CambiarRolView.as_view(), name="cambiar-rol"),
 
+    # ======================
     # API principal
+    # ======================
     path("api/", include(router.urls)),
 ]
