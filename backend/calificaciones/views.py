@@ -1,6 +1,5 @@
-from django.contrib.auth import authenticate, get_user_model
+from django.contrib.auth import get_user_model
 from rest_framework import status
-from rest_framework.authtoken.models import Token
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -8,7 +7,6 @@ from rest_framework.views import APIView
 from .models import UsuarioPerfil
 from .serializers import (
     RegistroCorredorSerializer,
-    LoginSerializer,
     UsuarioPerfilSerializer,
     CambiarRolSerializer,
 )
@@ -16,124 +14,85 @@ from .serializers import (
 User = get_user_model()
 
 
-# ------------------------------------------------------------
-# REGISTRO DE CORREDOR / USUARIO
-# ------------------------------------------------------------
 class RegistroCorredorView(APIView):
+    """
+    Registro de usuarios tipo corredor.
+    No genera token aquí; el login se hace con SimpleJWT en /api/auth/login/.
+    """
+
     permission_classes = [AllowAny]
 
     def post(self, request):
         serializer = RegistroCorredorSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        # Debe crear:
-        # - User
-        # - UsuarioPerfil
-        # - Corredor (si aplica)
-        data = serializer.save()                  # ← user_id, perfil_id, corredor_id...
-        user = User.objects.get(id=data["user_id"])
-
-        # Generar token
-        token, _ = Token.objects.get_or_create(user=user)
-        data["token"] = token.key
+        data = serializer.save()
 
         return Response(data, status=status.HTTP_201_CREATED)
 
 
-# ------------------------------------------------------------
-# LOGIN
-# ------------------------------------------------------------
-class LoginView(APIView):
-    permission_classes = [AllowAny]
-
-    def post(self, request):
-        serializer = LoginSerializer(data=request.data)
-        if not serializer.is_valid():
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-        username = serializer.validated_data["username"]
-        password = serializer.validated_data["password"]
-
-        user = authenticate(request, username=username, password=password)
-        if not user or not user.is_active:
-            return Response(
-                {"detail": "Credenciales inválidas"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        token, _ = Token.objects.get_or_create(user=user)
-        perfil = getattr(user, "perfil", None)
-
-        return Response(
-            {
-                "token": token.key,
-                "user_id": user.id,
-                "username": user.username,
-                "rol": getattr(perfil, "rol", None),
-            }
-        )
-
-
-# ------------------------------------------------------------
-# WHOAMI — DATOS DEL USUARIO AUTENTICADO
-# ------------------------------------------------------------
 class WhoAmIView(APIView):
+    """
+    Devuelve información del usuario autenticado, incluyendo rol y corredor.
+    """
+
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        perfil = getattr(request.user, "perfil", None)
-        if not perfil:
-            return Response(
-                {"detail": "El usuario no tiene perfil asociado"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        user = request.user
+        perfil = getattr(user, "perfil", None)
 
-        data = UsuarioPerfilSerializer(perfil).data
-        return Response(data)
+        data = {
+            "id": user.id,
+            "username": user.username,
+            "email": user.email,
+            "is_staff": user.is_staff,
+            "perfil": {
+                "id": getattr(perfil, "id", None),
+                "rol": getattr(perfil, "rol", None),
+                "corredor_id": getattr(perfil, "corredor_id", None),
+            }
+            if perfil
+            else None,
+        }
+
+        return Response(data, status=status.HTTP_200_OK)
 
 
-# ------------------------------------------------------------
-# CAMBIAR ROL DE UN USUARIO PERFIL
-# ------------------------------------------------------------
 class CambiarRolView(APIView):
+    """
+    Permite que un usuario staff cambie el rol de otro UsuarioPerfil.
+    """
+
     permission_classes = [IsAuthenticated]
 
-    def patch(self, request, usuario_id):
-        # Validar permisos
-        user = request.user
-        es_admin = user.is_superuser or user.is_staff
-
-        perfil_actual = getattr(user, "perfil", None)
-        if perfil_actual and perfil_actual.rol == "admin":
-            es_admin = True
-
-        if not es_admin:
+    def post(self, request, usuario_id):
+        # Solo staff puede cambiar roles
+        if not request.user.is_staff:
             return Response(
-                {"detail": "No tienes permisos para cambiar roles."},
+                {"detail": "No tienes permiso para cambiar roles."},
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        # Obtener perfil destino
         try:
             perfil = UsuarioPerfil.objects.get(id=usuario_id)
         except UsuarioPerfil.DoesNotExist:
             return Response(
-                {"detail": "UsuarioPerfil no encontrado"},
+                {"detail": "UsuarioPerfil no encontrado."},
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        # Validar nuevo rol
         serializer = CambiarRolSerializer(data=request.data)
-        if serializer.is_valid():
-            perfil.rol = serializer.validated_data["rol"]
-            perfil.save()
+        serializer.is_valid(raise_exception=True)
 
-            return Response(
-                {
-                    "detail": "Rol actualizado correctamente",
-                    "usuario_id": perfil.id,
-                    "rol": perfil.rol,
-                }
-            )
+        perfil.rol = serializer.validated_data["rol"]
+        perfil.save()
 
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        return Response(
+            {
+                "detail": "Rol actualizado correctamente.",
+                "usuario_id": perfil.id,
+                "rol": perfil.rol,
+            },
+            status=status.HTTP_200_OK,
+        )

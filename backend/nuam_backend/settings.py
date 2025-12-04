@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 from datetime import timedelta
 import pymysql
+from datetime import timedelta
 
 pymysql.install_as_MySQLdb()
 
@@ -55,9 +56,9 @@ INSTALLED_APPS = [
     "django.contrib.messages",
     "django.contrib.staticfiles",
     "rest_framework",
-    'rest_framework_simplejwt',
-    "calificaciones",
+    "rest_framework_simplejwt",
     "corsheaders",
+    "calificaciones",
 ]
 
 
@@ -166,14 +167,13 @@ STORAGES = {
 # =========================
 
 REST_FRAMEWORK = {
-    "DEFAULT_PERMISSION_CLASSES": [
-        "rest_framework.permissions.IsAuthenticated",
-    ],
-    "DEFAULT_AUTHENTICATION_CLASSES": [
+    "DEFAULT_AUTHENTICATION_CLASSES": (
         "rest_framework_simplejwt.authentication.JWTAuthentication",
-    ],
+    ),
+    "DEFAULT_PERMISSION_CLASSES": (
+        "rest_framework.permissions.IsAuthenticated",
+    ),
 }
-
 # =========================
 # SimpleJWT
 # =========================

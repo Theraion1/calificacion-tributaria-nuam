@@ -157,13 +157,19 @@ class CambiarRolSerializer(serializers.Serializer):
 
 
 class CustomTokenSerializer(TokenObtainPairSerializer):
+    """
+    Serializer para SimpleJWT que agrega datos del perfil al token.
+    """
+
     @classmethod
     def get_token(cls, user):
         token = super().get_token(user)
+
         token["username"] = user.username
         token["email"] = user.email
 
-        perfil = getattr(user, "usuarioperfil", None)
+        # IMPORTANTE: el related_name del perfil es "perfil"
+        perfil = getattr(user, "perfil", None)
         if perfil:
             token["rol"] = perfil.rol
             token["corredor_id"] = perfil.corredor_id
@@ -174,7 +180,7 @@ class CustomTokenSerializer(TokenObtainPairSerializer):
         data = super().validate(attrs)
 
         user = self.user
-        perfil = getattr(user, "usuarioperfil", None)
+        perfil = getattr(user, "perfil", None)
 
         data["user"] = {
             "id": user.id,
@@ -185,7 +191,9 @@ class CustomTokenSerializer(TokenObtainPairSerializer):
                 "id": getattr(perfil, "id", None),
                 "rol": getattr(perfil, "rol", None),
                 "corredor_id": getattr(perfil, "corredor_id", None),
-            } if perfil else None,
+            }
+            if perfil
+            else None,
         }
 
         return data
