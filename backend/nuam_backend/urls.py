@@ -22,14 +22,16 @@ from calificaciones.views import (
 )
 
 router = DefaultRouter()
-router.register(r"paises", PaisViewSet)
-router.register(r"corredores", CorredorViewSet)
-router.register(r"calificaciones", CalificacionTributariaViewSet)
-router.register(r"archivos-carga", ArchivoCargaViewSet, basename="archivos-carga")
+router.register("paises", PaisViewSet, basename="pais")
+router.register("corredores", CorredorViewSet, basename="corredor")
 router.register(
-    r"historial-calificaciones",
+    "calificaciones", CalificacionTributariaViewSet, basename="calificacion-tributaria"
+)
+router.register("jobs-carga", ArchivoCargaViewSet, basename="archivo-carga")
+router.register(
+    "historial-calificaciones",
     HistorialCalificacionViewSet,
-    basename="historial-calificaciones",
+    basename="historial-calificacion",
 )
 
 urlpatterns = [
@@ -37,10 +39,15 @@ urlpatterns = [
 
     # Autenticación JWT
     path("api/auth/login/", LoginAPI.as_view(), name="jwt_login"),
-    path("api/auth/refresh/", TokenRefreshView.as_view(), name="jwt_refresh"),
+    path("api/login/", LoginAPI.as_view(), name="jwt_login_legacy"),  # alias extra
+    path("api/auth/refresh/", TokenRefreshView.as_view(), name="token_refresh"),
 
-    # Usuarios / perfiles
-    path("api/registro-corredor/", RegistroCorredorView.as_view(), name="registro-corredor"),
+    # Endpoints auxiliares
+    path(
+        "api/registro-corredor/",
+        RegistroCorredorView.as_view(),
+        name="registro-corredor",
+    ),
     path("api/whoami/", WhoAmIView.as_view(), name="whoami"),
     path(
         "api/usuarios/<int:usuario_id>/cambiar-rol/",
