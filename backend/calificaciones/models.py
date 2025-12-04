@@ -56,10 +56,20 @@ class UsuarioPerfil(TimeStampedModel):
         Corredor,
         on_delete=models.CASCADE,
         related_name="usuarios",
+        null=True,      
+        blank=True,    
     )
 
     def __str__(self):
         return f"{self.nombre} ({self.rol})"
+
+    def clean(self):
+        super().clean()  
+
+        if self.rol in ("corredor", "auditor") and not self.corredor:
+            raise ValidationError(
+                {"corredor": "Este campo es obligatorio para rol corredor/auditor."}
+            )
 
 
 class ArchivoCarga(TimeStampedModel):
