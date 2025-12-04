@@ -366,7 +366,7 @@ def procesar_archivo_carga(archivo_carga):
                 try:
                     valor = _to_decimal(valor_bruto)
 
-                    # FIX: si _to_decimal devuelve None => usar 0
+                    # Si _to_decimal devuelve None => usar 0
                     if valor is None:
                         valor = Decimal("0")
 
@@ -418,6 +418,7 @@ def procesar_archivo_carga(archivo_carga):
                 instrumento=instrumento,
                 defaults=dict(
                     pais=pais_obj,
+                    pais_detectado=pais_obj,   # ← reflejar país detectado
                     observaciones=observaciones,
                     archivo_origen=archivo_carga,
                     **factores,
@@ -428,6 +429,7 @@ def procesar_archivo_carga(archivo_carga):
                 nuevos += 1
             else:
                 calif.pais = pais_obj
+                calif.pais_detectado = pais_obj   # ← actualizar país detectado también
                 calif.observaciones = observaciones
                 calif.archivo_origen = archivo_carga
                 for k, v in factores.items():
@@ -483,7 +485,4 @@ def procesar_archivo_carga(archivo_carga):
                 "errores_por_fila",
             ]
         )
-        # No relanzamos la excepción para que la vista pueda seguir
         return
-
-

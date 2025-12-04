@@ -176,23 +176,53 @@ class CalificacionTributariaViewSet(viewsets.ModelViewSet):
 
         return qs.order_by("-creado_en")
 
+    # --------- helper para detectar país y setear pais_detectado ----------
+    def _detectar_y_setear_pais_detectado(self, calif: CalificacionTributaria):
+        texto_obs = (calif.observaciones or "").strip()
+        if not texto_obs:
+            return
+
+        detector = DetectorPaisTributario()
+        row = {
+            "identificador_cliente": calif.identificador_cliente,
+            "instrumento": calif.instrumento,
+            "observaciones": texto_obs,
+        }
+
+        iso3_detectado, confianza = detector.detectar(row)
+        if not iso3_detectado:
+            return
+
+        pais_detectado = Pais.objects.filter(
+            codigo_iso3__iexact=iso3_detectado
+        ).first()
+
+        if pais_detectado and calif.pais_detectado_id != pais_detectado.id:
+            calif.pais_detectado = pais_detectado
+            calif.save(update_fields=["pais_detectado"])
+
     def perform_create(self, serializer):
         user = self.request.user
         if user.is_superuser or user.is_staff:
-            serializer.save(creado_por=user, actualizado_por=user)
-            return
-        perfil = getattr(user, "perfil", None)
-        if not perfil or perfil.rol != "corredor":
-            raise PermissionDenied("Solo corredores pueden crear calificaciones.")
-        serializer.save(
-            corredor=perfil.corredor,
-            creado_por=user,
-            actualizado_por=user,
-        )
+            calif = serializer.save(creado_por=user, actualizado_por=user)
+        else:
+            perfil = getattr(user, "perfil", None)
+            if not perfil or perfil.rol != "corredor":
+                raise PermissionDenied("Solo corredores pueden crear calificaciones.")
+            calif = serializer.save(
+                corredor=perfil.corredor,
+                creado_por=user,
+                actualizado_por=user,
+            )
+
+        # detección automática después de crear
+        self._detectar_y_setear_pais_detectado(calif)
 
     def perform_update(self, serializer):
         user = self.request.user
-        serializer.save(actualizado_por=user)
+        calif = serializer.save(actualizado_por=user)
+        # detección automática después de actualizar
+        self._detectar_y_setear_pais_detectado(calif)
 
     @action(detail=True, methods=["post"], url_path="detectar-pais")
     def detectar_pais(self, request, pk=None):
