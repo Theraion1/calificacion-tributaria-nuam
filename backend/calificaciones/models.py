@@ -4,6 +4,8 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.contrib.auth import get_user_model
 from django.db import models
+from django.db.models import Max, IntegerField
+from django.db.models.functions import Cast
 
 
 # =====================================================================
@@ -219,7 +221,7 @@ class CalificacionTributaria(TimeStampedModel):
     factor_11 = models.DecimalField(max_digits=5, decimal_places=4, default=0)
     factor_12 = models.DecimalField(
         max_digits=5, decimal_places=4, default=0
-    )  # ← FIX 🔥
+    )  # ← FIX
     factor_13 = models.DecimalField(max_digits=5, decimal_places=4, default=0)
     factor_14 = models.DecimalField(max_digits=5, decimal_places=4, default=0)
     factor_15 = models.DecimalField(max_digits=5, decimal_places=4, default=0)
@@ -254,6 +256,7 @@ class CalificacionTributaria(TimeStampedModel):
     def __str__(self):
         return f"{self.identificador_cliente} - {self.instrumento}"
 
+    # ---------- FACTORES ----------
     def suma_factores(self) -> Decimal:
         valores = [
             self.factor_8,
@@ -271,12 +274,36 @@ class CalificacionTributaria(TimeStampedModel):
         ]
         return sum((v or Decimal("0") for v in valores), Decimal("0"))
 
+    # ---------- VALIDACIONES ----------
     def clean(self):
         super().clean()
+
+        # Regla original: suma de factores <= 1
         if self.suma_factores() > Decimal("1"):
             raise ValidationError("La suma de factores no puede ser mayor a 1.")
 
+        # Nueva regla: secuencia_evento numérica y >= 10000
+        if self.secuencia_evento:
+            if not self.secuencia_evento.isdigit():
+                raise ValidationError({"secuencia_evento": "Debe ser numérica."})
+            if int(self.secuencia_evento) < 10000:
+                raise ValidationError(
+                    {"secuencia_evento": "Debe ser mayor o igual a 10000."}
+                )
+
+    # ---------- AUTOGENERACIÓN SECUENCIA ----------
     def save(self, *args, **kwargs):
+        # Si no viene secuencia_evento, la generamos automáticamente
+        if not self.secuencia_evento:
+            qs = (
+                self.__class__
+                .objects.exclude(secuencia_evento__isnull=True)
+                .exclude(secuencia_evento__exact="")
+                .annotate(seq_int=Cast("secuencia_evento", IntegerField()))
+            )
+            max_seq = qs.aggregate(max_seq=Max("seq_int"))["max_seq"] or 9999
+            self.secuencia_evento = str(max_seq + 1)
+
         self.full_clean()
         return super().save(*args, **kwargs)
 

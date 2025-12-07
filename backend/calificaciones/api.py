@@ -122,10 +122,12 @@ class CalificacionTributariaViewSet(viewsets.ModelViewSet):
         user = self.request.user
         qs = CalificacionTributaria.objects.select_related("corredor", "pais").all()
 
+        # --------- permisos por tipo de usuario ----------
         if not user.is_authenticated:
             return qs.none()
 
         if user.is_superuser or user.is_staff:
+            # ve todo
             pass
         else:
             perfil = getattr(user, "perfil", None)
@@ -135,12 +137,28 @@ class CalificacionTributariaViewSet(viewsets.ModelViewSet):
             if perfil.rol == "corredor":
                 qs = qs.filter(corredor=perfil.corredor)
             elif perfil.rol == "auditor":
+                # ve todo, pero solo lectura
                 pass
             else:
                 return qs.none()
 
         params = self.request.query_params
 
+        # --------- filtros nuevos ----------
+        mercado = params.get("mercado")
+        ejercicio = params.get("ejercicio")
+        estado = params.get("estado")
+
+        if mercado:
+            qs = qs.filter(mercado__iexact=mercado)
+
+        if ejercicio:
+            qs = qs.filter(ejercicio=ejercicio)
+
+        if estado:
+            qs = qs.filter(estado__iexact=estado)
+
+        # --------- filtros existentes ----------
         pais_id = params.get("pais_id")
         instrumento = params.get("instrumento")
         cliente = params.get("cliente")
