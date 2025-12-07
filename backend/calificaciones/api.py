@@ -8,6 +8,8 @@ from django.core.files.storage import default_storage
 from django.db.models import Q
 from decimal import Decimal
 from django.forms.models import model_to_dict
+from django.core.exceptions import ValidationError as DjangoValidationError
+
 
 from .models import (
     Pais,
@@ -217,13 +219,11 @@ class CalificacionTributariaViewSet(viewsets.ModelViewSet):
                 actualizado_por=user,
             )
 
-        # detección automática después de crear
         self._detectar_y_setear_pais_detectado(calif)
 
     def perform_update(self, serializer):
         user = self.request.user
         calif = serializer.save(actualizado_por=user)
-        # detección automática después de actualizar
         self._detectar_y_setear_pais_detectado(calif)
 
     # ======================================================
@@ -357,12 +357,23 @@ class CalificacionTributariaViewSet(viewsets.ModelViewSet):
             valor = (monto or Decimal("0")) / total
             setattr(calif, nombre, valor)
 
-        calif.save()
+        try:
+            calif.save()
+        except DjangoValidationError as e:
+            return Response(
+                {"detail": e.messages},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        suma = sum(
+            (getattr(calif, nombre) or Decimal("0") for nombre in nombres),
+            Decimal("0"),
+        )
 
         return Response(
             {
                 "id": calif.id,
-                "suma_factores": str(calif.suma_factores()),
+                "suma_factores": str(suma),
             }
         )
 
