@@ -353,10 +353,21 @@ class CalificacionTributariaViewSet(viewsets.ModelViewSet):
             "factor_16", "factor_17", "factor_18", "factor_19",
         ]
 
-        for nombre, monto in zip(nombres, montos):
-            valor = (monto or Decimal("0")) / total
+        # Usaremos 4 decimales máximo (max_digits=5, decimal_places=4)
+        escala = Decimal("0.0001")
+
+        # 1) calculamos valores normalizados y redondeados
+        valores = []
+        for monto in montos:
+            bruto = (monto or Decimal("0")) / total
+            valor = bruto.quantize(escala)  # 4 decimales máximo
+            valores.append(valor)
+
+        # 2) asignamos a los campos
+        for nombre, valor in zip(nombres, valores):
             setattr(calif, nombre, valor)
 
+        # 3) intentamos guardar capturando errores de validación del modelo
         try:
             calif.save()
         except DjangoValidationError as e:
@@ -365,10 +376,8 @@ class CalificacionTributariaViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        suma = sum(
-            (getattr(calif, nombre) or Decimal("0") for nombre in nombres),
-            Decimal("0"),
-        )
+        # 4) calculamos la suma final para devolverla
+        suma = sum(valores, Decimal("0"))
 
         return Response(
             {
@@ -376,6 +385,7 @@ class CalificacionTributariaViewSet(viewsets.ModelViewSet):
                 "suma_factores": str(suma),
             }
         )
+
 
     # ======================================================
     # 4.2 Aprobar calificación
