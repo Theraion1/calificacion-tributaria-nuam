@@ -6,6 +6,8 @@ from rest_framework.exceptions import PermissionDenied
 
 from django.core.files.storage import default_storage
 from django.db.models import Q
+from decimal import Decimal
+from django.forms.models import model_to_dict
 
 from .models import (
     Pais,
@@ -224,14 +226,19 @@ class CalificacionTributariaViewSet(viewsets.ModelViewSet):
         # detección automática después de actualizar
         self._detectar_y_setear_pais_detectado(calif)
 
-    @action(detail=True, methods=["post"], url_path="detectar-pais")
-    def detectar_pais(self, request, pk=None):
+    # ======================================================
+    # 4.2 Recalcular país (detalle)
+    # ======================================================
+    @action(detail=True, methods=["post"], url_path="recalcular-pais")
+    def recalcular_pais(self, request, pk=None):
         calif = self.get_object()
-        texto = request.data.get("texto", "")
 
+        texto = request.data.get("texto")
         if not texto:
+            texto = calif.observaciones or ""
+        if not texto.strip():
             return Response(
-                {"detail": "Debe enviar un campo 'texto'."},
+                {"detail": "No hay texto disponible para detección."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -243,7 +250,6 @@ class CalificacionTributariaViewSet(viewsets.ModelViewSet):
 
         detector = DetectorPaisTributario()
         iso3_detectado, confianza = detector.detectar(row)
-        detalle = {}
 
         pais_detectado = None
         if iso3_detectado:
@@ -261,9 +267,185 @@ class CalificacionTributariaViewSet(viewsets.ModelViewSet):
                 "pais_detectado": str(pais_detectado) if pais_detectado else None,
                 "iso3_detectado": iso3_detectado,
                 "confianza": confianza,
-                "detalle_scores": detalle,
             }
         )
+
+    # ======================================================
+    # 4.3 Recalcular país detectado masivo (detail=False)
+    # ======================================================
+    @action(detail=False, methods=["post"], url_path="recalcular-pais-detectado")
+    def recalcular_pais_detectado(self, request):
+        user = request.user
+        if not (user.is_staff or user.is_superuser):
+            raise PermissionDenied(
+                "Solo staff puede recalcular pais_detectado masivamente."
+            )
+
+        qs = self.get_queryset().filter(
+            pais_detectado__isnull=True
+        ).exclude(
+            observaciones__isnull=True
+        ).exclude(
+            observaciones__exact=""
+        )
+
+        total = qs.count()
+        actualizados = 0
+        sin_detectar = 0
+
+        detector = DetectorPaisTributario()
+
+        for calif in qs:
+            row = {
+                "identificador_cliente": calif.identificador_cliente,
+                "instrumento": calif.instrumento,
+                "observaciones": calif.observaciones or "",
+            }
+            iso3_detectado, confianza = detector.detectar(row)
+            if not iso3_detectado:
+                sin_detectar += 1
+                continue
+
+            pais_detectado = Pais.objects.filter(
+                codigo_iso3__iexact=iso3_detectado
+            ).first()
+
+            if not pais_detectado:
+                sin_detectar += 1
+                continue
+
+            if calif.pais_detectado_id != pais_detectado.id:
+                calif.pais_detectado = pais_detectado
+                calif.save(update_fields=["pais_detectado"])
+                actualizados += 1
+
+        return Response(
+            {
+                "total": total,
+                "actualizados": actualizados,
+                "sin_detectar": sin_detectar,
+            }
+        )
+
+    # ======================================================
+    # 4.2 Calcular factores (normaliza para que sumen 1)
+    # ======================================================
+    @action(detail=True, methods=["post"], url_path="calcular-factores")
+    def calcular_factores(self, request, pk=None):
+        calif = self.get_object()
+
+        montos = [
+            calif.factor_8, calif.factor_9, calif.factor_10, calif.factor_11,
+            calif.factor_12, calif.factor_13, calif.factor_14, calif.factor_15,
+            calif.factor_16, calif.factor_17, calif.factor_18, calif.factor_19,
+        ]
+        total = sum((m or Decimal("0") for m in montos), Decimal("0"))
+
+        if total <= Decimal("0"):
+            return Response(
+                {"detail": "La suma actual de factores es 0; no se puede normalizar."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        nombres = [
+            "factor_8", "factor_9", "factor_10", "factor_11",
+            "factor_12", "factor_13", "factor_14", "factor_15",
+            "factor_16", "factor_17", "factor_18", "factor_19",
+        ]
+
+        for nombre, monto in zip(nombres, montos):
+            valor = (monto or Decimal("0")) / total
+            setattr(calif, nombre, valor)
+
+        calif.save()
+
+        return Response(
+            {
+                "id": calif.id,
+                "suma_factores": str(calif.suma_factores()),
+            }
+        )
+
+    # ======================================================
+    # 4.2 Aprobar calificación
+    # ======================================================
+    @action(detail=True, methods=["post"], url_path="aprobar")
+    def aprobar(self, request, pk=None):
+        calif = self.get_object()
+        user = request.user
+        perfil = getattr(user, "perfil", None)
+
+        if not (user.is_staff or user.is_superuser or (perfil and perfil.rol == "admin")):
+            raise PermissionDenied("Solo admin/staff puede aprobar calificaciones.")
+
+        calif.estado = "aprobada"
+        calif.actualizado_por = user
+        calif.save(update_fields=["estado", "actualizado_por", "actualizado_en"])
+
+        HistorialCalificacion.objects.create(
+            calificacion=calif,
+            usuario=user,
+            accion="aprobar",
+            descripcion_cambio="Calificación marcada como aprobada.",
+        )
+
+        serializer = self.get_serializer(calif)
+        return Response(serializer.data)
+
+    # ======================================================
+    # 4.2 Copiar calificación
+    # ======================================================
+    @action(detail=True, methods=["post"], url_path="copiar")
+    def copiar(self, request, pk=None):
+        calif = self.get_object()
+        user = request.user
+
+        data = model_to_dict(
+            calif,
+            exclude=[
+                "id",
+                "creado_en",
+                "actualizado_en",
+                "archivo_origen",
+                "creado_por",
+                "actualizado_por",
+            ],
+        )
+
+        nuevo_ejercicio = request.data.get("ejercicio")
+        nuevo_mercado = request.data.get("mercado")
+
+        if nuevo_ejercicio is not None:
+            data["ejercicio"] = nuevo_ejercicio
+        if nuevo_mercado is not None:
+            data["mercado"] = nuevo_mercado
+
+        data["estado"] = "pendiente"
+        data["creado_por"] = user
+        data["actualizado_por"] = user
+
+        nueva_calif = CalificacionTributaria.objects.create(**data)
+
+        HistorialCalificacion.objects.create(
+            calificacion=nueva_calif,
+            usuario=user,
+            accion="copiar",
+            descripcion_cambio=f"Copia de calificación {calif.id}.",
+        )
+
+        serializer = self.get_serializer(nueva_calif)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    # ======================================================
+    # 6. Historial de una calificación específica
+    # ======================================================
+    @action(detail=True, methods=["get"], url_path="historial")
+    def historial(self, request, pk=None):
+        calif = self.get_object()
+        eventos = calif.historial.select_related("usuario").all()
+        serializer = HistorialCalificacionSerializer(eventos, many=True)
+        return Response(serializer.data)
+
 
 
 class ArchivoCargaViewSet(viewsets.ModelViewSet):
@@ -371,6 +553,69 @@ class ArchivoCargaViewSet(viewsets.ModelViewSet):
                 "tiempo_procesamiento_seg": job.tiempo_procesamiento_seg,
             }
         )
+
+    # ======================================================
+    # 5.2 Procesar job (general / FACTOR)
+    # ======================================================
+    @action(detail=True, methods=["post"], url_path="procesar")
+    def procesar(self, request, pk=None):
+        job = self.get_object()
+
+        user = request.user
+        if not user.is_authenticated:
+            raise PermissionDenied("Autenticación requerida.")
+        if not (user.is_superuser or user.is_staff):
+            perfil = getattr(user, "perfil", None)
+            if not (perfil and perfil.rol == "corredor" and job.corredor_id == perfil.corredor_id):
+                raise PermissionDenied("No autorizado para procesar este job.")
+
+        procesar_archivo_carga(job)
+
+        job.refresh_from_db()
+        serializer = self.get_serializer(job)
+        return Response(serializer.data)
+
+    @action(detail=True, methods=["post"], url_path="procesar-factor")
+    def procesar_factor(self, request, pk=None):
+        job = self.get_object()
+        if job.tipo_carga != "FACTOR":
+            return Response(
+                {"detail": "Este job no es de tipo FACTOR."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return self.procesar(request, pk)
+
+    # ======================================================
+    # 5.2 MONTO / CALCULAR FACTORES (stubs por ahora)
+    # ======================================================
+    @action(detail=True, methods=["post"], url_path="procesar-monto")
+    def procesar_monto(self, request, pk=None):
+        job = self.get_object()
+        if job.tipo_carga != "MONTO":
+            return Response(
+                {"detail": "Este job no es de tipo MONTO."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        return Response(
+            {"detail": "Procesar carga por MONTO todavía no está implementado en el backend."},
+            status=status.HTTP_501_NOT_IMPLEMENTED,
+        )
+
+    @action(detail=True, methods=["post"], url_path="calcular-factores")
+    def calcular_factores_desde_job(self, request, pk=None):
+        job = self.get_object()
+        if job.tipo_carga != "MONTO":
+            return Response(
+                {"detail": "Este job no es de tipo MONTO."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        return Response(
+            {"detail": "Calcular factores para cargas por MONTO todavía no está implementado en el backend."},
+            status=status.HTTP_501_NOT_IMPLEMENTED,
+        )
+
 
 
 class HistorialCalificacionViewSet(viewsets.ReadOnlyModelViewSet):
