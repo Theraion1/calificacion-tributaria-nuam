@@ -85,9 +85,9 @@ class UsuarioPerfil(TimeStampedModel):
     def clean(self):
         super().clean()
         if self.rol in ("corredor", "auditor") and not self.corredor:
-            raise ValidationError({
-                "corredor": "Este campo es obligatorio para rol corredor/auditor."
-            })
+            raise ValidationError(
+                {"corredor": "Este campo es obligatorio para rol corredor/auditor."}
+            )
 
 
 # =====================================================================
@@ -120,7 +120,9 @@ class ArchivoCarga(TimeStampedModel):
         related_name="jobs_carga_enviados",
     )
 
-    tipo_carga = models.CharField(max_length=10, choices=TIPO_CARGA_CHOICES, default="FACTOR")
+    tipo_carga = models.CharField(
+        max_length=10, choices=TIPO_CARGA_CHOICES, default="FACTOR"
+    )
     periodo = models.PositiveIntegerField(null=True, blank=True)
     mercado = models.CharField(max_length=10, null=True, blank=True)
 
@@ -148,36 +150,62 @@ class ArchivoCarga(TimeStampedModel):
 # CALIFICACIÓN TRIBUTARIA
 # =====================================================================
 class CalificacionTributaria(TimeStampedModel):
-    ejercicio = models.PositiveIntegerField(null=True, blank=True)
+    # Cabecera / datos generales
+    ejercicio = models.PositiveIntegerField(null=True, blank=True)  # Año
     mercado = models.CharField(max_length=10, null=True, blank=True)
+
+    # Nuevos campos para replicar la pantalla de "Ingresar Calificación"
+    fecha_pago = models.DateField(null=True, blank=True)
+    descripcion = models.CharField(max_length=255, null=True, blank=True)
+    secuencia_evento = models.CharField(max_length=50, null=True, blank=True)
+
+    dividendo = models.DecimalField(
+        max_digits=18, decimal_places=4, null=True, blank=True
+    )
+    valor_historico = models.DecimalField(
+        max_digits=18, decimal_places=4, null=True, blank=True
+    )
+    factor_actualizacion = models.DecimalField(
+        max_digits=10, decimal_places=5, null=True, blank=True
+    )
+
+    isfut = models.BooleanField(default=False)
 
     ESTADO_CHOICES = [
         ("pendiente", "Pendiente"),
         ("aprobada", "Aprobada"),
         ("rechazada", "Rechazada"),
     ]
-    estado = models.CharField(max_length=20, choices=ESTADO_CHOICES, default="pendiente")
-
-    valor_historico = models.DecimalField(max_digits=18, decimal_places=4, null=True, blank=True)
-    factor_actualizacion = models.DecimalField(max_digits=10, decimal_places=5, null=True, blank=True)
+    estado = models.CharField(
+        max_length=20, choices=ESTADO_CHOICES, default="pendiente"
+    )
 
     corredor = models.ForeignKey(
         Corredor, on_delete=models.CASCADE, related_name="calificaciones"
     )
 
     pais = models.ForeignKey(
-        Pais, on_delete=models.PROTECT, related_name="calificaciones",
-        null=True, blank=True
+        Pais,
+        on_delete=models.PROTECT,
+        related_name="calificaciones",
+        null=True,
+        blank=True,
     )
 
     pais_detectado = models.ForeignKey(
-        Pais, on_delete=models.SET_NULL, related_name="calificaciones_detectadas",
-        null=True, blank=True
+        Pais,
+        on_delete=models.SET_NULL,
+        related_name="calificaciones_detectadas",
+        null=True,
+        blank=True,
     )
 
     archivo_origen = models.ForeignKey(
-        ArchivoCarga, on_delete=models.CASCADE, related_name="calificaciones_generadas",
-        null=True, blank=True
+        ArchivoCarga,
+        on_delete=models.CASCADE,
+        related_name="calificaciones_generadas",
+        null=True,
+        blank=True,
     )
 
     identificador_cliente = models.CharField(max_length=100)
@@ -189,7 +217,9 @@ class CalificacionTributaria(TimeStampedModel):
     factor_9 = models.DecimalField(max_digits=5, decimal_places=4, default=0)
     factor_10 = models.DecimalField(max_digits=5, decimal_places=4, default=0)
     factor_11 = models.DecimalField(max_digits=5, decimal_places=4, default=0)
-    factor_12 = models.DecimalField(max_digits=5, decimal_places=4, default=0)  # ← FIX 🔥
+    factor_12 = models.DecimalField(
+        max_digits=5, decimal_places=4, default=0
+    )  # ← FIX 🔥
     factor_13 = models.DecimalField(max_digits=5, decimal_places=4, default=0)
     factor_14 = models.DecimalField(max_digits=5, decimal_places=4, default=0)
     factor_15 = models.DecimalField(max_digits=5, decimal_places=4, default=0)
@@ -201,12 +231,18 @@ class CalificacionTributaria(TimeStampedModel):
     observaciones = models.TextField(null=True, blank=True)
 
     creado_por = models.ForeignKey(
-        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
-        related_name="calificaciones_creadas", null=True, blank=True
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        related_name="calificaciones_creadas",
+        null=True,
+        blank=True,
     )
     actualizado_por = models.ForeignKey(
-        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
-        related_name="calificaciones_actualizadas", null=True, blank=True
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        related_name="calificaciones_actualizadas",
+        null=True,
+        blank=True,
     )
 
     class Meta:
@@ -220,9 +256,18 @@ class CalificacionTributaria(TimeStampedModel):
 
     def suma_factores(self) -> Decimal:
         valores = [
-            self.factor_8, self.factor_9, self.factor_10, self.factor_11,
-            self.factor_12, self.factor_13, self.factor_14, self.factor_15,
-            self.factor_16, self.factor_17, self.factor_18, self.factor_19,
+            self.factor_8,
+            self.factor_9,
+            self.factor_10,
+            self.factor_11,
+            self.factor_12,
+            self.factor_13,
+            self.factor_14,
+            self.factor_15,
+            self.factor_16,
+            self.factor_17,
+            self.factor_18,
+            self.factor_19,
         ]
         return sum((v or Decimal("0") for v in valores), Decimal("0"))
 
