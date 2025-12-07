@@ -30,6 +30,15 @@ class CalificacionTributariaSerializer(serializers.ModelSerializer):
     class Meta:
         model = CalificacionTributaria
         fields = "__all__"
+        read_only_fields = [
+            "corredor",
+            "creado_por",
+            "actualizado_por",
+            "pais_detectado",
+            "archivo_origen",
+            "creado_en",
+            "actualizado_en",
+        ]
 
 
 class ArchivoCargaSerializer(serializers.ModelSerializer):
@@ -45,16 +54,13 @@ class HistorialCalificacionSerializer(serializers.ModelSerializer):
 
 
 class RegistroCorredorSerializer(serializers.Serializer):
-    # Datos del usuario
     username = serializers.CharField(max_length=150)
     email = serializers.EmailField()
     password = serializers.CharField(write_only=True, min_length=8)
     nombre_usuario = serializers.CharField(max_length=150)
 
-    # Opción 1: usar corredor existente
     corredor_id = serializers.IntegerField(required=False)
 
-    # Opción 2: crear corredor nuevo
     nombre_corredor = serializers.CharField(max_length=150, required=False)
     codigo_interno = serializers.CharField(max_length=50, required=False)
     pais_id = serializers.IntegerField(required=False)
@@ -66,25 +72,20 @@ class RegistroCorredorSerializer(serializers.Serializer):
         nombre_corredor = attrs.get("nombre_corredor")
         pais_id = attrs.get("pais_id")
 
-        # Validar username único
         if User.objects.filter(username=username).exists():
             raise serializers.ValidationError("Ese nombre de usuario ya existe.")
 
-        # Si viene corredor_id → usar corredor existente
         if corredor_id:
             if not Corredor.objects.filter(id=corredor_id).exists():
                 raise serializers.ValidationError(
                     {"corredor_id": "No existe un corredor con ese ID."}
                 )
         else:
-            # Si no viene corredor_id → obligamos a mandar datos del corredor nuevo
             if not (nombre_corredor and codigo_interno and pais_id):
                 raise serializers.ValidationError(
-                    "Debes enviar 'corredor_id' o bien "
-                    "'nombre_corredor', 'codigo_interno' y 'pais_id' para crear un corredor nuevo."
+                    "Debes enviar 'corredor_id' o bien 'nombre_corredor', 'codigo_interno' y 'pais_id' para crear un corredor nuevo."
                 )
 
-            # Validar código interno único solo cuando se crea corredor
             if Corredor.objects.filter(codigo_interno=codigo_interno).exists():
                 raise serializers.ValidationError(
                     "Ese código interno de corredor ya existe."
@@ -103,14 +104,12 @@ class RegistroCorredorSerializer(serializers.Serializer):
         codigo_interno = validated_data.get("codigo_interno")
         pais_id = validated_data.get("pais_id")
 
-        # 1) Crear usuario Django
         user = User.objects.create_user(
             username=username,
             email=email,
             password=password,
         )
 
-        # 2) Obtener o crear corredor
         if corredor_id:
             corredor = Corredor.objects.get(id=corredor_id)
         else:
@@ -121,7 +120,6 @@ class RegistroCorredorSerializer(serializers.Serializer):
                 pais=pais,
             )
 
-        # 3) Crear perfil
         perfil = UsuarioPerfil.objects.create(
             user=user,
             nombre=nombre_usuario,
@@ -157,10 +155,6 @@ class CambiarRolSerializer(serializers.Serializer):
 
 
 class CustomTokenSerializer(TokenObtainPairSerializer):
-    """
-    Serializer para SimpleJWT que agrega datos del perfil al token.
-    """
-
     @classmethod
     def get_token(cls, user):
         token = super().get_token(user)
@@ -168,7 +162,6 @@ class CustomTokenSerializer(TokenObtainPairSerializer):
         token["username"] = user.username
         token["email"] = user.email
 
-        # IMPORTANTE: el related_name del perfil es "perfil"
         perfil = getattr(user, "perfil", None)
         if perfil:
             token["rol"] = perfil.rol
