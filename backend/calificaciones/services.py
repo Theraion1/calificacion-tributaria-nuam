@@ -129,6 +129,9 @@ def _normalizar_header(nombre):
         return "pais"
     if "observacion" in base:
         return "observaciones"
+    # NUEVO: factor_actualizacion
+    if "factor" in base and "actualiz" in base:
+        return "factor_actualizacion"
 
     m = re.search(r"factor[_\s]*(\d+)", base)
     if m:
@@ -389,6 +392,15 @@ def procesar_archivo_carga(archivo_carga):
             instrumento = (row.get("instrumento") or "").strip()
             observaciones = (row.get("observaciones") or "").strip()
 
+            # Factor de actualización (opcional en archivo)
+            factor_actualizacion = None
+            valor_bruto_fa = row.get("factor_actualizacion", "")
+            if valor_bruto_fa not in (None, ""):
+                try:
+                    factor_actualizacion = _to_decimal(valor_bruto_fa)
+                except ValidationError as e:
+                    errores.setdefault("factor_actualizacion", []).append(str(e))
+
             # Validaciones básicas
             if not identificador_cliente:
                 errores.setdefault("identificador_cliente", []).append(
@@ -459,9 +471,10 @@ def procesar_archivo_carga(archivo_carga):
                 instrumento=instrumento,
                 defaults=dict(
                     pais=pais_obj,
-                    pais_detectado=pais_obj,
+                    pais_detectado=pais_obj,   # ← reflejar país detectado
                     observaciones=observaciones,
                     archivo_origen=archivo_carga,
+                    factor_actualizacion=factor_actualizacion,
                     **factores,
                 ),
             )
@@ -470,9 +483,10 @@ def procesar_archivo_carga(archivo_carga):
                 nuevos += 1
             else:
                 calif.pais = pais_obj
-                calif.pais_detectado = pais_obj
+                calif.pais_detectado = pais_obj   # ← actualizar país detectado también
                 calif.observaciones = observaciones
                 calif.archivo_origen = archivo_carga
+                calif.factor_actualizacion = factor_actualizacion
                 for k, v in factores.items():
                     setattr(calif, k, v)
                 calif.save()
