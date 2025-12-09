@@ -1,6 +1,7 @@
 import os
 import re
 from decimal import Decimal
+from math import isnan
 
 import pandas as pd
 import pdfplumber
@@ -83,9 +84,18 @@ def _to_decimal(value):
     """
     Convierte distintos formatos a Decimal.
     Acepta: "", None -> None; "0.1", "0,1", 0.1, 1, etc.
+    Trata NaN como None.
     """
     if value is None:
         return None
+
+    # Manejar NaN de pandas (float)
+    if isinstance(value, float):
+        try:
+            if isnan(value):
+                return None
+        except TypeError:
+            pass
 
     if isinstance(value, Decimal):
         return value
@@ -104,6 +114,23 @@ def _to_decimal(value):
         return Decimal(s)
     except Exception:
         raise ValidationError("Valor decimal inválido: %r" % value)
+
+
+def _safe_strip(value):
+    """
+    Devuelve un string "limpio":
+    - None o NaN -> ""
+    - cualquier otro valor -> str(value).strip()
+    """
+    if value is None:
+        return ""
+    if isinstance(value, float):
+        try:
+            if isnan(value):
+                return ""
+        except TypeError:
+            pass
+    return str(value).strip()
 
 
 def _normalizar_header(nombre):
@@ -129,7 +156,7 @@ def _normalizar_header(nombre):
         return "pais"
     if "observacion" in base:
         return "observaciones"
-    # NUEVO: factor_actualizacion
+    # factor_actualizacion
     if "factor" in base and "actualiz" in base:
         return "factor_actualizacion"
 
@@ -388,9 +415,9 @@ def procesar_archivo_carga(archivo_carga):
             data_fila = dict(row)
             fila_numero = index
 
-            identificador_cliente = (row.get("identificador_cliente") or "").strip()
-            instrumento = (row.get("instrumento") or "").strip()
-            observaciones = (row.get("observaciones") or "").strip()
+            identificador_cliente = _safe_strip(row.get("identificador_cliente"))
+            instrumento = _safe_strip(row.get("instrumento"))
+            observaciones = _safe_strip(row.get("observaciones"))
 
             # Factor de actualización (opcional en archivo)
             factor_actualizacion = None
@@ -430,7 +457,7 @@ def procesar_archivo_carga(archivo_carga):
 
             # Determinar país (explícito o por detección)
             pais_obj = None
-            pais_valor = (row.get("pais") or "").strip()
+            pais_valor = _safe_strip(row.get("pais"))
 
             if pais_valor:
                 pais_obj = (
@@ -471,7 +498,7 @@ def procesar_archivo_carga(archivo_carga):
                 instrumento=instrumento,
                 defaults=dict(
                     pais=pais_obj,
-                    pais_detectado=pais_obj,   # ← reflejar país detectado
+                    pais_detectado=pais_obj,
                     observaciones=observaciones,
                     archivo_origen=archivo_carga,
                     factor_actualizacion=factor_actualizacion,
@@ -483,7 +510,7 @@ def procesar_archivo_carga(archivo_carga):
                 nuevos += 1
             else:
                 calif.pais = pais_obj
-                calif.pais_detectado = pais_obj   # ← actualizar país detectado también
+                calif.pais_detectado = pais_obj
                 calif.observaciones = observaciones
                 calif.archivo_origen = archivo_carga
                 calif.factor_actualizacion = factor_actualizacion
@@ -543,3 +570,4 @@ def procesar_archivo_carga(archivo_carga):
         )
         notificar_resultado_archivo(archivo_carga)
         return
+
