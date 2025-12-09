@@ -7,6 +7,7 @@ import pdfplumber
 from django.core.exceptions import ValidationError
 from django.utils import timezone
 
+from .email_utils import send_email_async
 from .models import ArchivoCarga, CalificacionTributaria, Pais
 
 
@@ -280,6 +281,45 @@ def _leer_archivo_a_rows(archivo_carga):
     return rows_normalizadas
 
 
+def notificar_resultado_archivo(archivo_carga):
+    """
+    Envía un email al usuario que subió la carga o al correo del corredor,
+    informando el resultado del procesamiento.
+    """
+    email = None
+
+    if getattr(archivo_carga, "submitted_by", None):
+        email = getattr(archivo_carga.submitted_by, "email", None)
+
+    if not email and getattr(archivo_carga, "corredor", None):
+        email = getattr(archivo_carga.corredor, "email_contacto", None)
+
+    if not email:
+        return
+
+    resumen = archivo_carga.resumen_proceso or {}
+
+    subject = f"[NUAM] Resultado de procesamiento archivo #{archivo_carga.id}"
+    message = (
+        f"Hola,\n\n"
+        f"Tu archivo '{archivo_carga.nombre_original}' ha sido procesado.\n"
+        f"Estado: {archivo_carga.estado_proceso}.\n\n"
+        f"Resumen: {resumen}\n\n"
+        f"Saludos,\nEquipo NUAM"
+    )
+
+    send_email_async(
+        subject=subject,
+        message=message,
+        recipient_list=[email],
+        html_template="emails/archivo_procesado.html",
+        context={
+            "archivo": archivo_carga,
+            "resumen": resumen,
+        },
+    )
+
+
 def procesar_archivo_carga(archivo_carga):
     """
     Procesa un ArchivoCarga:
@@ -329,6 +369,7 @@ def procesar_archivo_carga(archivo_carga):
                     "errores_por_fila",
                 ]
             )
+            notificar_resultado_archivo(archivo_carga)
             return
 
         total_registros = len(rows)
@@ -418,7 +459,7 @@ def procesar_archivo_carga(archivo_carga):
                 instrumento=instrumento,
                 defaults=dict(
                     pais=pais_obj,
-                    pais_detectado=pais_obj,   # ← reflejar país detectado
+                    pais_detectado=pais_obj,
                     observaciones=observaciones,
                     archivo_origen=archivo_carga,
                     **factores,
@@ -429,7 +470,7 @@ def procesar_archivo_carga(archivo_carga):
                 nuevos += 1
             else:
                 calif.pais = pais_obj
-                calif.pais_detectado = pais_obj   # ← actualizar país detectado también
+                calif.pais_detectado = pais_obj
                 calif.observaciones = observaciones
                 calif.archivo_origen = archivo_carga
                 for k, v in factores.items():
@@ -460,6 +501,7 @@ def procesar_archivo_carga(archivo_carga):
                 "errores_por_fila",
             ]
         )
+        notificar_resultado_archivo(archivo_carga)
 
     except Exception as e:
         # Cualquier error inesperado
@@ -485,4 +527,5 @@ def procesar_archivo_carga(archivo_carga):
                 "errores_por_fila",
             ]
         )
+        notificar_resultado_archivo(archivo_carga)
         return

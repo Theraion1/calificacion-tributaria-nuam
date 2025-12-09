@@ -1,0 +1,19 @@
+<html>
+  <body>
+    <p>Hola,</p>
+    <p>
+      Tu archivo <strong>{{ archivo.nombre_original }}</strong> fue procesado.
+    </p>
+    <p>Estado: <strong>{{ archivo.estado_proceso }}</strong></p>
+
+    <h4>Resumen</h4>
+    <ul>
+      <li>Total registros: {{ resumen.total_registros }}</li>
+      <li>Nuevos: {{ resumen.nuevos }}</li>
+      <li>Actualizados: {{ resumen.actualizados }}</li>
+      <li>Rechazados: {{ resumen.rechazados }}</li>
+    </ul>
+
+    <p>Saludos,<br>Equipo NUAM</p>
+  </body>
+</html>

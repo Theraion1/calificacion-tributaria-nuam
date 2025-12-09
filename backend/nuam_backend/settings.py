@@ -6,7 +6,6 @@ import os
 from pathlib import Path
 from datetime import timedelta
 import pymysql
-from datetime import timedelta
 
 pymysql.install_as_MySQLdb()
 
@@ -32,17 +31,20 @@ allowed_hosts_env = os.getenv("DJANGO_ALLOWED_HOSTS", "")
 if allowed_hosts_env:
     ALLOWED_HOSTS = [h.strip() for h in allowed_hosts_env.split(",") if h.strip()]
 else:
-    ALLOWED_HOSTS = ["localhost", 
-    "127.0.0.1",
-    "api.raioncore.com",    # ===== Este tambien hay que agregar========
-    "nuam.raioncore.com",   # ===== Este tambien hay que agregar========
-    "raioncore.com",        # ===== Este tambien hay que agregar========
-    "www.raioncore.com",]   # ===== Este tambien hay que agregar========
+    ALLOWED_HOSTS = [
+        "localhost",
+        "127.0.0.1",
+        "api.raioncore.com",
+        "nuam.raioncore.com",
+        "raioncore.com",
+        "www.raioncore.com",
+    ]
 
 CSRF_TRUSTED_ORIGINS = [
     "https://api.raioncore.com",
-    "https://nuam.raioncore.com",  # ===== Este tambien hay que agregar========
+    "https://nuam.raioncore.com",
 ]
+
 
 # =========================
 # Apps
@@ -89,7 +91,7 @@ ROOT_URLCONF = "nuam_backend.urls"
 TEMPLATES = [
     {
         "BACKEND": "django.template.backends.django.DjangoTemplates",
-        "DIRS": [],
+        "DIRS": [BASE_DIR / "templates"],
         "APP_DIRS": True,
         "OPTIONS": {
             "context_processors": [
@@ -174,6 +176,8 @@ REST_FRAMEWORK = {
         "rest_framework.permissions.IsAuthenticated",
     ),
 }
+
+
 # =========================
 # SimpleJWT
 # =========================
@@ -184,15 +188,47 @@ SIMPLE_JWT = {
     "AUTH_HEADER_TYPES": ("Bearer",),
 }
 
-CORS_ALLOWED_ORIGINS = [             # ===== Este tambien hay que agregar========
-    "https://nuam.raioncore.com",    # ===== Este tambien hay que agregar========
-    "https://raioncore.com",         # ===== Este tambien hay que agregar========
-    "https://www.raioncore.com",     # ===== Este tambien hay que agregar========
-]                                    # ===== Este tambien hay que agregar========
 
-CORS_ALLOW_CREDENTIALS = True        # ===== Este tambien hay que agregar========
+# =========================
+# CORS
+# =========================
+
+CORS_ALLOWED_ORIGINS = [
+    "https://nuam.raioncore.com",
+    "https://raioncore.com",
+    "https://www.raioncore.com",
+]
+CORS_ALLOW_CREDENTIALS = True
+
+
 # =========================
 # Primary key
 # =========================
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+
+
+# =========================
+# Email
+# =========================
+
+EMAIL_BACKEND = os.getenv(
+    "EMAIL_BACKEND",
+    "django.core.mail.backends.console.EmailBackend",
+)
+
+# En producción puedes configurar esto en Railway (DEFAULT_FROM_EMAIL env)
+DEFAULT_FROM_EMAIL = os.getenv(
+    "DEFAULT_FROM_EMAIL",
+    "NUAM <no-reply@example.com>",
+)
+
+# Si más adelante quieres SMTP real, solo define estas variables
+# en el entorno (Railway) y cambia EMAIL_BACKEND a smtp:
+#
+# EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
+# EMAIL_HOST = os.getenv("EMAIL_HOST", "")
+# EMAIL_PORT = int(os.getenv("EMAIL_PORT", "587"))
+# EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER", "")
+# EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD", "")
+# EMAIL_USE_TLS = True
