@@ -25,7 +25,11 @@ from .serializers import (
     ArchivoCargaSerializer,
     HistorialCalificacionSerializer,
 )
-from .services import procesar_archivo_carga, DetectorPaisTributario
+from .services import (
+    procesar_archivo_carga,
+    procesar_archivo_carga_monto,
+    DetectorPaisTributario,
+)
 
 
 class IsStaffOrReadOnly(permissions.BasePermission):
@@ -293,7 +297,7 @@ class CalificacionTributariaViewSet(viewsets.ModelViewSet):
     # ======================================================
     @action(detail=False, methods=["post"], url_path="recalcular-pais-detectado")
     def recalcular_pais_detectado(self, request):
-        user = request.user
+        user = self.request.user
         if not (user.is_staff or user.is_superuser):
             raise PermissionDenied(
                 "Solo staff puede recalcular pais_detectado masivamente."
@@ -346,7 +350,7 @@ class CalificacionTributariaViewSet(viewsets.ModelViewSet):
         )
 
     # ======================================================
-    # 4.2 Calcular factores (normaliza para que sumen 1)
+    # 4.2 Calcular factores (normaliza para que sumen 1) en detalle
     # ======================================================
     @action(detail=True, methods=["post"], url_path="calcular-factores")
     def calcular_factores(self, request, pk=None):
@@ -403,7 +407,6 @@ class CalificacionTributariaViewSet(viewsets.ModelViewSet):
                 "suma_factores": str(suma),
             }
         )
-
 
     # ======================================================
     # 4.2 Aprobar calificación
@@ -484,7 +487,6 @@ class CalificacionTributariaViewSet(viewsets.ModelViewSet):
         eventos = calif.historial.select_related("usuario").all()
         serializer = HistorialCalificacionSerializer(eventos, many=True)
         return Response(serializer.data)
-
 
 
 class ArchivoCargaViewSet(viewsets.ModelViewSet):
@@ -582,14 +584,15 @@ class ArchivoCargaViewSet(viewsets.ModelViewSet):
             tipo_carga=tipo_carga,
         )
 
-        #  3) Procesar automáticamente SOLO si es FACTOR
-        if archivo_carga.tipo_carga == "FACTOR":
-            try:
+        #  3) Procesar automáticamente según tipo_carga
+        try:
+            if archivo_carga.tipo_carga == "FACTOR":
                 procesar_archivo_carga(archivo_carga)
-            except Exception:
-                archivo_carga.refresh_from_db()
-        # Si es MONTO, por ahora se queda en "pendiente"
-        # hasta que implementes procesar_monto.
+            elif archivo_carga.tipo_carga == "MONTO":
+                procesar_archivo_carga_monto(archivo_carga)
+        except Exception:
+            # Si algo falla dentro, el propio servicio deja estado_proceso en error
+            archivo_carga.refresh_from_db()
 
         archivo_carga.refresh_from_db()
         serializer = self.get_serializer(archivo_carga)
@@ -643,16 +646,26 @@ class ArchivoCargaViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=["post"], url_path="procesar-monto")
     def procesar_monto(self, request, pk=None):
         job = self.get_object()
+
+        user = request.user
+        if not user.is_authenticated:
+            raise PermissionDenied("Autenticación requerida.")
+        if not (user.is_superuser or user.is_staff):
+            perfil = getattr(user, "perfil", None)
+            if not (perfil and perfil.rol == "corredor" and job.corredor_id == perfil.corredor_id):
+                raise PermissionDenied("No autorizado para procesar este job.")
+
         if job.tipo_carga != "MONTO":
             return Response(
                 {"detail": "Este job no es de tipo MONTO."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        return Response(
-            {"detail": "Procesar carga por MONTO todavía no está implementado en el backend."},
-            status=status.HTTP_501_NOT_IMPLEMENTED,
-        )
+        procesar_archivo_carga_monto(job)
+
+        job.refresh_from_db()
+        serializer = self.get_serializer(job)
+        return Response(serializer.data)
 
     @action(detail=True, methods=["post"], url_path="calcular-factores")
     def calcular_factores_desde_job(self, request, pk=None):
@@ -664,9 +677,14 @@ class ArchivoCargaViewSet(viewsets.ModelViewSet):
             )
 
         return Response(
-            {"detail": "Calcular factores para cargas por MONTO todavía no está implementado en el backend."},
-            status=status.HTTP_501_NOT_IMPLEMENTED,
+            {
+                "detail": "Calcular factores para cargas por MONTO se realiza automáticamente "
+                          "al procesar el job (subir o /procesar-monto)."
+            },
+            status=status.HTTP_200_OK,
         )
+
+
 class HistorialCalificacionViewSet(viewsets.ReadOnlyModelViewSet):
     """
     Permite consultar el historial de calificaciones.
@@ -682,4 +700,3 @@ class HistorialCalificacionViewSet(viewsets.ReadOnlyModelViewSet):
         if calif_id:
             qs = qs.filter(calificacion_id=calif_id)
         return qs.order_by("-creado_en")
-

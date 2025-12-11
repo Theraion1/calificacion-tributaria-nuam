@@ -438,7 +438,7 @@ def procesar_archivo_carga(archivo_carga):
                     "This field cannot be blank."
                 )
 
-            # Procesar factores 8–19
+            # Procesar factores 8–19 como FACTORES (modo actual)
             factores = {}
             for fname in factor_fields:
                 valor_bruto = row.get(fname, "")
@@ -571,3 +571,285 @@ def procesar_archivo_carga(archivo_carga):
         notificar_resultado_archivo(archivo_carga)
         return
 
+
+# ============================================================
+#  NUEVO: helper para interpretar factor_8..19 como MONTOS
+# ============================================================
+def _calcular_factores_desde_montos(row, factor_fields, errores):
+    """
+    Interpreta los campos factor_8..factor_19 como MONTOS brutos y
+    devuelve un dict con factores normalizados (que suman ~1).
+    Si la suma de montos es 0, agrega un error y devuelve None.
+    """
+    montos = {}
+    for fname in factor_fields:
+        valor_bruto = row.get(fname, "")
+
+        try:
+            monto = _to_decimal(valor_bruto)
+
+            # _to_decimal(""), None, NaN -> None -> lo tratamos como 0
+            if monto is None:
+                monto = Decimal("0")
+
+            if monto < 0:
+                errores.setdefault(fname, []).append(
+                    "El monto no puede ser negativo."
+                )
+
+            montos[fname] = monto
+
+        except ValidationError as e:
+            errores.setdefault(fname, []).append(str(e))
+
+    total = sum(montos.values(), Decimal("0"))
+
+    if total <= 0:
+        errores.setdefault("factores", []).append(
+            "La suma de montos de factores es 0; "
+            "no se pueden calcular factores normalizados."
+        )
+        return None
+
+    escala = Decimal("0.0001")
+    factores = {}
+
+    for fname, monto in montos.items():
+        valor = (monto / total).quantize(escala)
+        factores[fname] = valor
+
+    return factores
+
+
+# ============================================================
+#  NUEVO: procesamiento por MONTO (normaliza factores)
+# ============================================================
+def procesar_archivo_carga_monto(archivo_carga):
+    """
+    Variante de procesamiento para tipo_carga = 'MONTO'.
+
+    Lee los campos factor_8..factor_19 como MONTOS y
+    calcula factores normalizados que se guardan en la calificación.
+    """
+
+    if not isinstance(archivo_carga, ArchivoCarga):
+        archivo_carga = ArchivoCarga.objects.get(pk=archivo_carga)
+
+    started = timezone.now()
+    archivo_carga.started_at = started
+    archivo_carga.estado_proceso = "procesando"
+    archivo_carga.save(update_fields=["started_at", "estado_proceso"])
+
+    detector = DetectorPaisTributario()
+
+    try:
+        rows = _leer_archivo_a_rows(archivo_carga)
+
+        if not rows:
+            finished = timezone.now()
+            elapsed = (finished - started).total_seconds()
+            archivo_carga.finished_at = finished
+            archivo_carga.tiempo_procesamiento_seg = elapsed
+            archivo_carga.estado_proceso = "error"
+            archivo_carga.resumen_proceso = {
+                "total_registros": 0,
+                "nuevos": 0,
+                "actualizados": 0,
+                "rechazados": 0,
+                "detalle": "No se encontraron filas utilizables en el archivo.",
+            }
+            archivo_carga.errores_por_fila = []
+            archivo_carga.save(
+                update_fields=[
+                    "finished_at",
+                    "tiempo_procesamiento_seg",
+                    "estado_proceso",
+                    "resumen_proceso",
+                    "errores_por_fila",
+                ]
+            )
+            notificar_resultado_archivo(archivo_carga)
+            return
+
+        total_registros = len(rows)
+        nuevos = 0
+        actualizados = 0
+        rechazados = 0
+        errores_por_fila = []
+
+        factor_fields = ["factor_%d" % i for i in range(8, 20)]
+
+        for index, row in enumerate(rows, start=2):
+            errores = {}
+            data_fila = dict(row)
+            fila_numero = index
+
+            identificador_cliente = _safe_strip(row.get("identificador_cliente"))
+            instrumento = _safe_strip(row.get("instrumento"))
+            observaciones = _safe_strip(row.get("observaciones"))
+
+            # Factor de actualización (opcional en archivo)
+            factor_actualizacion = None
+            valor_bruto_fa = row.get("factor_actualizacion", "")
+            if valor_bruto_fa not in (None, ""):
+                try:
+                    factor_actualizacion = _to_decimal(valor_bruto_fa)
+                except ValidationError as e:
+                    errores.setdefault("factor_actualizacion", []).append(str(e))
+
+            # Validaciones básicas
+            if not identificador_cliente:
+                errores.setdefault("identificador_cliente", []).append(
+                    "This field cannot be blank."
+                )
+            if not instrumento:
+                errores.setdefault("instrumento", []).append(
+                    "This field cannot be blank."
+                )
+
+            # Interpretar factor_8..19 como MONTOS y calcular factores normalizados
+            factores = _calcular_factores_desde_montos(
+                row, factor_fields, errores
+            )
+
+            # Si hubo error al calcular factores, se rechaza fila
+            if factores is None:
+                rechazados += 1
+                errores_por_fila.append(
+                    {
+                        "fila": fila_numero,
+                        "data": data_fila,
+                        "errores": errores,
+                    }
+                )
+                continue
+
+            # Determinar país (explícito o por detección)
+            pais_obj = None
+            pais_valor = _safe_strip(row.get("pais"))
+
+            if pais_valor:
+                pais_obj = (
+                    Pais.objects.filter(codigo_iso3__iexact=pais_valor).first()
+                    or Pais.objects.filter(nombre__iexact=pais_valor).first()
+                )
+                if not pais_obj:
+                    errores.setdefault("pais", []).append(
+                        "País '%s' no encontrado en tabla Pais." % pais_valor
+                    )
+            else:
+                codigo_iso3, score = detector.detectar(row)
+                if codigo_iso3:
+                    pais_obj = Pais.objects.filter(
+                        codigo_iso3__iexact=codigo_iso3
+                    ).first()
+                if not pais_obj:
+                    errores.setdefault("pais", []).append(
+                        "No se pudo determinar el país a partir de los datos."
+                    )
+
+            # Si hay errores de validación de campos base o país, rechazamos fila
+            if errores:
+                rechazados += 1
+                errores_por_fila.append(
+                    {
+                        "fila": fila_numero,
+                        "data": data_fila,
+                        "errores": errores,
+                    }
+                )
+                continue
+
+            # Buscar calificación existente
+            calif = CalificacionTributaria.objects.filter(
+                corredor=archivo_carga.corredor,
+                identificador_cliente=identificador_cliente,
+                instrumento=instrumento,
+            ).first()
+
+            if not calif:
+                # Crear nueva
+                calif = CalificacionTributaria(
+                    corredor=archivo_carga.corredor,
+                    identificador_cliente=identificador_cliente,
+                    instrumento=instrumento,
+                )
+                nuevos += 1
+            else:
+                actualizados += 1
+
+            # Actualizar campos comunes
+            calif.pais = pais_obj
+            calif.pais_detectado = pais_obj
+            calif.observaciones = observaciones
+            calif.archivo_origen = archivo_carga
+            calif.factor_actualizacion = factor_actualizacion
+
+            # Asignar factores calculados
+            for k, v in factores.items():
+                setattr(calif, k, v)
+
+            try:
+                calif.full_clean()
+                calif.save()
+            except ValidationError as e:
+                rechazados += 1
+                errores_por_fila.append(
+                    {
+                        "fila": fila_numero,
+                        "data": data_fila,
+                        "errores": getattr(e, "message_dict", str(e)),
+                    }
+                )
+                continue
+
+        # Fin del procesamiento OK (con o sin rechazados)
+        finished = timezone.now()
+        elapsed = (finished - started).total_seconds()
+
+        archivo_carga.finished_at = finished
+        archivo_carga.tiempo_procesamiento_seg = elapsed
+        archivo_carga.estado_proceso = "ok" if rechazados == 0 else "error"
+        archivo_carga.resumen_proceso = {
+            "total_registros": total_registros,
+            "nuevos": nuevos,
+            "actualizados": actualizados,
+            "rechazados": rechazados,
+        }
+        archivo_carga.errores_por_fila = errores_por_fila
+        archivo_carga.save(
+            update_fields=[
+                "finished_at",
+                "tiempo_procesamiento_seg",
+                "estado_proceso",
+                "resumen_proceso",
+                "errores_por_fila",
+            ]
+        )
+        notificar_resultado_archivo(archivo_carga)
+
+    except Exception as e:
+        finished = timezone.now()
+        elapsed = (finished - started).total_seconds()
+        archivo_carga.finished_at = finished
+        archivo_carga.tiempo_procesamiento_seg = elapsed
+        archivo_carga.estado_proceso = "error"
+        archivo_carga.resumen_proceso = {
+            "total_registros": 0,
+            "nuevos": 0,
+            "actualizados": 0,
+            "rechazados": 0,
+            "detalle": "Error inesperado en procesamiento MONTO: %s" % str(e),
+        }
+        archivo_carga.errores_por_fila = []
+        archivo_carga.save(
+            update_fields=[
+                "finished_at",
+                "tiempo_procesamiento_seg",
+                "estado_proceso",
+                "resumen_proceso",
+                "errores_por_fila",
+            ]
+        )
+        notificar_resultado_archivo(archivo_carga)
+        return
