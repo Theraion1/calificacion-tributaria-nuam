@@ -25,33 +25,25 @@ from calificaciones.views import (
 router = DefaultRouter()
 router.register("paises", PaisViewSet, basename="pais")
 router.register("corredores", CorredorViewSet, basename="corredor")
-router.register(
-    "calificaciones",
-    CalificacionTributariaViewSet,
-    basename="calificacion-tributaria",
-)
+router.register("calificaciones", CalificacionTributariaViewSet, basename="calificacion-tributaria")
 router.register("jobs-carga", ArchivoCargaViewSet, basename="archivo-carga")
-router.register(
-    "historial-calificaciones",
-    HistorialCalificacionViewSet,
-    basename="historial-calificacion",
-)
+router.register("historial-calificaciones", HistorialCalificacionViewSet, basename="historial-calificacion")
 
 urlpatterns = [
     path("admin/", admin.site.urls),
 
     # Auth JWT
     path("api/auth/login/", LoginAPI.as_view(), name="jwt_login"),
-    path("api/auth/refresh/", TokenRefreshView.as_view(), name="token_refresh"),
+    path("api/auth/refresh/", TokenRefreshView.as_view(), name="jwt_refresh"),
 
-    # Endpoints auxiliares
+    # Users
     path("api/registro-corredor/", RegistroCorredorView.as_view(), name="registro-corredor"),
     path("api/whoami/", WhoAmIView.as_view(), name="whoami"),
     path("api/usuarios/<int:usuario_id>/cambiar-rol/", CambiarRolView.as_view(), name="cambiar-rol"),
 
-    # Conversión de archivos (PDF, CSV, XLSX)
+    # Conversión de archivos
     path("api/conversion/archivo/", ConversionArchivoView.as_view(), name="conversion-archivo"),
 
-    # API principal
+    # Rutas generadas por router (incluye /jobs-carga/subir/)
     path("api/", include(router.urls)),
 ]

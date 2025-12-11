@@ -35,6 +35,11 @@ from .services import (
 )
 
 
+
+# ============================================================
+# PERMISOS
+# ============================================================
+
 class IsStaffOrReadOnly(permissions.BasePermission):
     def has_permission(self, request, view):
         if request.method in permissions.SAFE_METHODS:
@@ -42,22 +47,28 @@ class IsStaffOrReadOnly(permissions.BasePermission):
         return request.user and request.user.is_staff
 
 
+
 class CalificacionPermission(permissions.BasePermission):
     def has_permission(self, request, view):
         user = request.user
         if not user or not user.is_authenticated:
             return False
+
         if request.method in permissions.SAFE_METHODS:
             return True
+
         if user.is_superuser or user.is_staff:
             return True
+
         perfil = getattr(user, "perfil", None)
         if perfil and perfil.rol in ["corredor", "admin"]:
             return True
+
         return False
 
     def has_object_permission(self, request, view, obj):
         user = request.user
+
         if request.method in permissions.SAFE_METHODS:
             if user.is_superuser or user.is_staff:
                 return True
@@ -67,51 +78,66 @@ class CalificacionPermission(permissions.BasePermission):
             if perfil and perfil.rol == "auditor":
                 return True
             return False
+
         if user.is_superuser or user.is_staff:
             return True
+
         perfil = getattr(user, "perfil", None)
         if perfil and perfil.rol == "corredor":
             return obj.corredor_id == perfil.corredor_id
+
         return False
+
 
 
 class ArchivoCargaPermission(permissions.BasePermission):
     def has_permission(self, request, view):
         user = request.user
+
         if not user or not user.is_authenticated:
             return False
+
         if request.method in permissions.SAFE_METHODS:
             return True
+
         if user.is_superuser or user.is_staff:
             return True
+
         perfil = getattr(user, "perfil", None)
-        if perfil and perfil.rol == "corredor":
-            return True
-        return False
+        return perfil and perfil.rol == "corredor"
 
     def has_object_permission(self, request, view, obj):
         user = request.user
+
         if request.method in permissions.SAFE_METHODS:
             if user.is_superuser or user.is_staff:
                 return True
+
             perfil = getattr(user, "perfil", None)
             if perfil and perfil.rol == "corredor":
                 return obj.corredor_id == perfil.corredor_id
             if perfil and perfil.rol == "auditor":
                 return True
+
             return False
+
         if user.is_superuser or user.is_staff:
             return True
-        perfil = getattr(user, "perfil", None)
-        if perfil and perfil.rol == "corredor":
-            return obj.corredor_id == perfil.corredor_id
-        return False
 
+        perfil = getattr(user, "perfil", None)
+        return perfil and perfil.rol == "corredor" and obj.corredor_id == perfil.corredor_id
+
+
+
+# ============================================================
+# VIEWSETS PRINCIPALES
+# ============================================================
 
 class PaisViewSet(viewsets.ModelViewSet):
     queryset = Pais.objects.all()
     serializer_class = PaisSerializer
     permission_classes = [IsStaffOrReadOnly]
+
 
 
 class CorredorViewSet(viewsets.ModelViewSet):
@@ -120,11 +146,15 @@ class CorredorViewSet(viewsets.ModelViewSet):
     permission_classes = [IsStaffOrReadOnly]
 
 
+
 class CalificacionTributariaViewSet(viewsets.ModelViewSet):
     queryset = CalificacionTributaria.objects.select_related("corredor", "pais").all()
     serializer_class = CalificacionTributariaSerializer
     permission_classes = [CalificacionPermission]
 
+    # ----------------------------------------
+    # FILTROS
+    # ----------------------------------------
     def get_queryset(self):
         user = self.request.user
         qs = CalificacionTributaria.objects.select_related("corredor", "pais").all()
@@ -132,8 +162,9 @@ class CalificacionTributariaViewSet(viewsets.ModelViewSet):
         if not user.is_authenticated:
             return qs.none()
 
+        perfil = getattr(user, "perfil", None)
+
         if not (user.is_superuser or user.is_staff):
-            perfil = getattr(user, "perfil", None)
             if not perfil:
                 return qs.none()
 
@@ -155,6 +186,7 @@ class CalificacionTributariaViewSet(viewsets.ModelViewSet):
         if estado:
             qs = qs.filter(estado__iexact=estado)
 
+        # Filtros adicionales
         pais_id = params.get("pais_id")
         instrumento = params.get("instrumento")
         cliente = params.get("cliente")
@@ -194,15 +226,19 @@ class CalificacionTributariaViewSet(viewsets.ModelViewSet):
 
         return qs.order_by("-creado_en")
 
+    # ----------------------------------------
+    # CREATE / UPDATE
+    # ----------------------------------------
     def perform_create(self, serializer):
         user = self.request.user
+
         if user.is_superuser or user.is_staff:
-            calif = serializer.save(creado_por=user, actualizado_por=user)
+            serializer.save(creado_por=user, actualizado_por=user)
         else:
             perfil = getattr(user, "perfil", None)
             if not perfil or perfil.rol != "corredor":
                 raise PermissionDenied("Solo corredores pueden crear calificaciones.")
-            calif = serializer.save(
+            serializer.save(
                 corredor=perfil.corredor,
                 creado_por=user,
                 actualizado_por=user,
@@ -212,6 +248,9 @@ class CalificacionTributariaViewSet(viewsets.ModelViewSet):
         user = self.request.user
         serializer.save(actualizado_por=user)
 
+    # ----------------------------------------
+    # APROBAR
+    # ----------------------------------------
     @action(detail=True, methods=["post"], url_path="aprobar")
     def aprobar(self, request, pk=None):
         calif = self.get_object()
@@ -219,7 +258,7 @@ class CalificacionTributariaViewSet(viewsets.ModelViewSet):
         perfil = getattr(user, "perfil", None)
 
         if not (user.is_staff or user.is_superuser or (perfil and perfil.rol == "admin")):
-            raise PermissionDenied("Solo admin/staff puede aprobar calificaciones.")
+            raise PermissionDenied("No autorizado.")
 
         calif.estado = "aprobada"
         calif.actualizado_por = user
@@ -234,6 +273,9 @@ class CalificacionTributariaViewSet(viewsets.ModelViewSet):
 
         return Response(self.get_serializer(calif).data)
 
+    # ----------------------------------------
+    # COPIAR
+    # ----------------------------------------
     @action(detail=True, methods=["post"], url_path="copiar")
     def copiar(self, request, pk=None):
         calif = self.get_object()
@@ -242,13 +284,14 @@ class CalificacionTributariaViewSet(viewsets.ModelViewSet):
         data = model_to_dict(
             calif,
             exclude=[
-                "id", "creado_en", "actualizado_en", "archivo_origen",
-                "creado_por", "actualizado_por"
+                "id", "creado_en", "actualizado_en",
+                "archivo_origen", "creado_por", "actualizado_por"
             ],
         )
 
         if request.data.get("ejercicio"):
             data["ejercicio"] = request.data["ejercicio"]
+
         if request.data.get("mercado"):
             data["mercado"] = request.data["mercado"]
 
@@ -267,11 +310,19 @@ class CalificacionTributariaViewSet(viewsets.ModelViewSet):
 
         return Response(self.get_serializer(nueva).data, status=201)
 
+    # ----------------------------------------
+    # HISTORIAL POR CALIFICACIÓN
+    # ----------------------------------------
     @action(detail=True, methods=["get"], url_path="historial")
     def historial(self, request, pk=None):
         eventos = self.get_object().historial.select_related("usuario")
         return Response(HistorialCalificacionSerializer(eventos, many=True).data)
 
+
+
+# ============================================================
+# ARCHIVO CARGA (INCLUYE /subir)
+# ============================================================
 
 class ArchivoCargaViewSet(viewsets.ModelViewSet):
     queryset = ArchivoCarga.objects.select_related("corredor").all()
@@ -281,17 +332,18 @@ class ArchivoCargaViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         user = self.request.user
+        perfil = getattr(user, "perfil", None)
 
         if user.is_superuser or user.is_staff:
             serializer.save(submitted_by=user)
-            return
+        else:
+            if not perfil or perfil.rol != "corredor":
+                raise PermissionDenied("Solo corredores pueden crear cargas.")
+            serializer.save(corredor=perfil.corredor, submitted_by=user)
 
-        perfil = getattr(user, "perfil", None)
-        if not perfil or perfil.rol != "corredor":
-            raise PermissionDenied("Solo corredores pueden crear cargas.")
-
-        serializer.save(corredor=perfil.corredor, submitted_by=user)
-
+    # ----------------------------------------
+    # SUBIR ARCHIVO
+    # ----------------------------------------
     @action(detail=False, methods=["post"], url_path="subir")
     def subir_archivo(self, request):
         user = request.user
@@ -310,6 +362,7 @@ class ArchivoCargaViewSet(viewsets.ModelViewSet):
         if tipo_carga not in ("FACTOR", "MONTO"):
             tipo_carga = "FACTOR"
 
+        # ADMIN puede subir para cualquier corredor
         if user.is_superuser or user.is_staff:
             corredor_id = request.data.get("corredor")
             if not corredor_id:
@@ -335,13 +388,11 @@ class ArchivoCargaViewSet(viewsets.ModelViewSet):
             tipo_carga=tipo_carga,
         )
 
-        try:
-            procesar_archivo_carga(archivo_carga)
-        except Exception:
-            archivo_carga.refresh_from_db()
+        procesar_archivo_carga(archivo_carga)
 
         return Response(self.get_serializer(archivo_carga).data, status=201)
 
+    # ----------------------------------------
     @action(detail=True, methods=["get"], url_path="resumen")
     def resumen(self, request, pk=None):
         job = self.get_object()
@@ -355,3 +406,79 @@ class ArchivoCargaViewSet(viewsets.ModelViewSet):
                 "tiempo_procesamiento_seg": job.tiempo_procesamiento_seg,
             }
         )
+
+
+
+# ============================================================
+# HISTORIAL GLOBAL (ViewSet Independiente)
+# ============================================================
+
+class HistorialCalificacionViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    Permite consultar el historial de calificaciones.
+    Solo lectura: list y retrieve.
+    Se puede filtrar por ?calificacion=<id>
+    """
+
+    serializer_class = HistorialCalificacionSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        qs = HistorialCalificacion.objects.select_related("calificacion", "usuario")
+        calif_id = self.request.query_params.get("calificacion")
+        if calif_id:
+            qs = qs.filter(calificacion_id=calif_id)
+        return qs.order_by("-creado_en")
+
+
+
+# ============================================================
+# CONVERSIÓN DE ARCHIVOS (PDF, XLSX, CSV)
+# ============================================================
+
+class ConversionArchivoView(APIView):
+    """
+    Endpoint para conversión de archivos:
+    - preview
+    - convertir
+    """
+
+    permission_classes = [permissions.IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser]
+
+    def post(self, request):
+        accion = request.query_params.get("accion", "preview").lower()
+        file_obj = request.FILES.get("archivo")
+        formato_destino = request.data.get("formato_destino")
+
+        delimitador = (request.data.get("delimitador") or ",").strip()
+        if len(delimitador) != 1:
+            delimitador = ","
+
+        if not file_obj:
+            return Response({"detail": "No se recibió ningún archivo."}, status=400)
+
+        try:
+            if accion == "preview":
+                data = generar_vista_previa_archivo(
+                    file_obj, file_obj.name, delimiter=delimitador
+                )
+                return Response(data, status=200)
+
+            elif accion == "convertir":
+                buffer, out_name, mimetype = convertir_archivo_generico(
+                    file_obj, file_obj.name, formato_destino, delimitador
+                )
+
+                response = HttpResponse(buffer.getvalue(), content_type=mimetype)
+                response["Content-Disposition"] = f'attachment; filename="{out_name}"'
+                return response
+
+            else:
+                return Response({"detail": "Acción no válida."}, status=400)
+
+        except DjangoValidationError as e:
+            return Response({"detail": str(e)}, status=400)
+
+        except Exception as e:
+            return Response({"detail": f"Error inesperado: {e}"}, status=500)
