@@ -14,8 +14,6 @@ from django.db.models.functions import Cast
 class TimeStampedModel(models.Model):
     creado_en = models.DateTimeField(auto_now_add=True)
     actualizado_en = models.DateTimeField(auto_now=True)
-
-    # Tu proyecto ORIGINAL usa "activo"
     activo = models.BooleanField(default=True)
 
     class Meta:
@@ -52,7 +50,6 @@ class Corredor(TimeStampedModel):
         return f"{self.nombre} [{self.codigo_interno}]"
 
     def delete(self, *args, **kwargs):
-        """Borra también los usuarios asociados (tu comportamiento original)."""
         User = get_user_model()
         usuarios_ids = list(self.usuarios.values_list("user_id", flat=True))
         User.objects.filter(id__in=usuarios_ids).delete()
@@ -93,7 +90,7 @@ class UsuarioPerfil(TimeStampedModel):
 
 
 # =====================================================================
-# ARCHIVO DE CARGA (JOB DE CARGA MASIVA)
+# ARCHIVO DE CARGA
 # =====================================================================
 class ArchivoCarga(TimeStampedModel):
     ESTADO_PROCESO_CHOICES = [
@@ -122,9 +119,7 @@ class ArchivoCarga(TimeStampedModel):
         related_name="jobs_carga_enviados",
     )
 
-    tipo_carga = models.CharField(
-        max_length=10, choices=TIPO_CARGA_CHOICES, default="FACTOR"
-    )
+    tipo_carga = models.CharField(max_length=10, choices=TIPO_CARGA_CHOICES, default="FACTOR")
     periodo = models.PositiveIntegerField(null=True, blank=True)
     mercado = models.CharField(max_length=10, null=True, blank=True)
 
@@ -133,9 +128,7 @@ class ArchivoCarga(TimeStampedModel):
     tipo_mime = models.CharField(max_length=100, null=True, blank=True)
     tamano_bytes = models.BigIntegerField(null=True, blank=True)
 
-    estado_proceso = models.CharField(
-        max_length=20, choices=ESTADO_PROCESO_CHOICES, default="pendiente"
-    )
+    estado_proceso = models.CharField(max_length=20, choices=ESTADO_PROCESO_CHOICES, default="pendiente")
 
     resumen_proceso = models.JSONField(null=True, blank=True)
     errores_por_fila = models.JSONField(null=True, blank=True)
@@ -152,24 +145,26 @@ class ArchivoCarga(TimeStampedModel):
 # CALIFICACIÓN TRIBUTARIA
 # =====================================================================
 class CalificacionTributaria(TimeStampedModel):
-    # Cabecera / datos generales
-    ejercicio = models.PositiveIntegerField(null=True, blank=True)  # Año
+    ejercicio = models.PositiveIntegerField(null=True, blank=True)
     mercado = models.CharField(max_length=10, null=True, blank=True)
 
-    # Nuevos campos para replicar la pantalla de "Ingresar Calificación"
     fecha_pago = models.DateField(null=True, blank=True)
     descripcion = models.CharField(max_length=255, null=True, blank=True)
     secuencia_evento = models.CharField(max_length=50, null=True, blank=True)
 
-    dividendo = models.DecimalField(
-        max_digits=18, decimal_places=4, null=True, blank=True
+    dividendo = models.DecimalField(max_digits=18, decimal_places=4, null=True, blank=True)
+    valor_historico = models.DecimalField(max_digits=18, decimal_places=4, null=True, blank=True)
+
+    # Campo necesario para cargas masivas y cálculo
+    valor_actualizado = models.DecimalField(
+        max_digits=18,
+        decimal_places=4,
+        null=True,
+        blank=True,
+        default=0
     )
-    valor_historico = models.DecimalField(
-        max_digits=18, decimal_places=4, null=True, blank=True
-    )
-    factor_actualizacion = models.DecimalField(
-        max_digits=10, decimal_places=5, null=True, blank=True
-    )
+
+    factor_actualizacion = models.DecimalField(max_digits=10, decimal_places=5, null=True, blank=True)
 
     isfut = models.BooleanField(default=False)
 
@@ -178,13 +173,9 @@ class CalificacionTributaria(TimeStampedModel):
         ("aprobada", "Aprobada"),
         ("rechazada", "Rechazada"),
     ]
-    estado = models.CharField(
-        max_length=20, choices=ESTADO_CHOICES, default="pendiente"
-    )
+    estado = models.CharField(max_length=20, choices=ESTADO_CHOICES, default="pendiente")
 
-    corredor = models.ForeignKey(
-        Corredor, on_delete=models.CASCADE, related_name="calificaciones"
-    )
+    corredor = models.ForeignKey(Corredor, on_delete=models.CASCADE, related_name="calificaciones")
 
     pais = models.ForeignKey(
         Pais,
@@ -214,14 +205,11 @@ class CalificacionTributaria(TimeStampedModel):
     instrumento = models.CharField(max_length=150)
     moneda = models.CharField(max_length=10, default="CLP")
 
-    # FACTORES 8–19 (CON EL FIX EN factor_12)
     factor_8 = models.DecimalField(max_digits=5, decimal_places=4, default=0)
     factor_9 = models.DecimalField(max_digits=5, decimal_places=4, default=0)
     factor_10 = models.DecimalField(max_digits=5, decimal_places=4, default=0)
     factor_11 = models.DecimalField(max_digits=5, decimal_places=4, default=0)
-    factor_12 = models.DecimalField(
-        max_digits=5, decimal_places=4, default=0
-    )  # ← FIX
+    factor_12 = models.DecimalField(max_digits=5, decimal_places=4, default=0)
     factor_13 = models.DecimalField(max_digits=5, decimal_places=4, default=0)
     factor_14 = models.DecimalField(max_digits=5, decimal_places=4, default=0)
     factor_15 = models.DecimalField(max_digits=5, decimal_places=4, default=0)
@@ -256,7 +244,6 @@ class CalificacionTributaria(TimeStampedModel):
     def __str__(self):
         return f"{self.identificador_cliente} - {self.instrumento}"
 
-    # ---------- FACTORES ----------
     def suma_factores(self) -> Decimal:
         valores = [
             self.factor_8,
@@ -274,15 +261,12 @@ class CalificacionTributaria(TimeStampedModel):
         ]
         return sum((v or Decimal("0") for v in valores), Decimal("0"))
 
-    # ---------- VALIDACIONES ----------
     def clean(self):
         super().clean()
 
-        # Regla original: suma de factores <= 1
         if self.suma_factores() > Decimal("1"):
             raise ValidationError("La suma de factores no puede ser mayor a 1.")
 
-        # Nueva regla: secuencia_evento numérica y >= 10000
         if self.secuencia_evento:
             if not self.secuencia_evento.isdigit():
                 raise ValidationError({"secuencia_evento": "Debe ser numérica."})
@@ -291,9 +275,7 @@ class CalificacionTributaria(TimeStampedModel):
                     {"secuencia_evento": "Debe ser mayor o igual a 10000."}
                 )
 
-    # ---------- AUTOGENERACIÓN SECUENCIA ----------
     def save(self, *args, **kwargs):
-        # Si no viene secuencia_evento, la generamos automáticamente
         if not self.secuencia_evento:
             qs = (
                 self.__class__
