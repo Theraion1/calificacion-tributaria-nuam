@@ -81,44 +81,64 @@ class DetectorPaisTributario(object):
 # -------------------------------
 
 def _parse_pdf_text_to_rows(file_obj):
+    """
+    Parser PDF universal:
+    - extrae TODO el texto legible
+    - detecta filas aunque no tengan formato tabular
+    - soporta: | , múltiples espacios, columnas desalineadas, filas rotas
+    - nunca revienta, siempre devuelve al menos un DataFrame usable
+    """
+
     rows = []
+
     try:
-        with pdfplumber.open(file_obj) as pdf:
-            for page in pdf.pages:
-                # 1. Intentar extraer como tabla estructurada
-                table = page.extract_table()
-                if table:
-                    rows.extend(table)
-                    continue
-
-                # 2. Si no se detecta tabla, extraer texto plano
-                text = page.extract_text() or ""
-                for line in text.split("\n"):
-                    clean = line.strip()
-                    if not clean:
-                        continue
-
-                    # Si trae pipes, es fácil
-                    if "|" in clean:
-                        rows.append([c.strip() for c in clean.split("|")])
-                        continue
-
-                    # 3. Detectar columnas separadas por varios espacios (PDF tabulares)
-                    parts = [p for p in re.split(r"\s{2,}", clean) if p]
-                    if len(parts) > 1:
-                        rows.append(parts)
-                        continue
-
-                    # 4. Si no se pudo dividir, lo tratamos como una sola columna
-                    rows.append([clean])
-
-        if not rows:
-            raise ValidationError("No se pudieron extraer filas desde el PDF.")
-
-        return rows
-
+        import pdfplumber
+        pdf = pdfplumber.open(file_obj)
     except Exception as e:
-        raise ValidationError(f"Error al leer PDF: {e}")
+        raise ValidationError(f"No se pudo abrir PDF: {e}")
+
+    for page in pdf.pages:
+        text = page.extract_text() or ""
+        if not text.strip():
+            continue
+
+        for line in text.split("\n"):
+            clean = line.strip()
+            if not clean:
+                continue
+
+            # 1) Separación por barras
+            if "|" in clean:
+                parts = [p.strip() for p in clean.split("|") if p.strip()]
+                if parts:
+                    rows.append(parts)
+                continue
+
+            # 2) Separación por 2+ espacios
+            parts = re.split(r"\s{2,}", clean)
+            parts = [p.strip() for p in parts if p.strip()]
+            if len(parts) > 1:
+                rows.append(parts)
+                continue
+
+            # 3) Si llega aquí, consideramos la línea como una sola columna
+            rows.append([clean])
+
+    pdf.close()
+
+    # Si no hay filas, devolvemos al menos una fila vacía
+    if not rows:
+        return [[""]]
+
+    # Normalización para evitar filas muy cortas
+    max_cols = max(len(r) for r in rows)
+    normalized = []
+    for r in rows:
+        fill = r + [""] * (max_cols - len(r))
+        normalized.append(fill)
+
+    return normalized
+
 
 
 
@@ -193,11 +213,23 @@ def _cargar_dataframe_desde_archivo(file_obj, nombre_archivo: str, delimiter: st
 
     if tipo == "PDF":
         rows = _parse_pdf_text_to_rows(file_obj)
-        if not rows:
-            raise ValidationError("No hay filas válidas en el PDF.")
-        return pd.DataFrame(rows)
+
+        # Convertimos a DataFrame aunque no existan encabezados
+        df = pd.DataFrame(rows)
+
+        # Si la primera fila parece encabezado, la usamos
+        header_candidate = df.iloc[0].tolist()
+        if any(str(h).lower() in ["cliente", "instrumento", "mercado", "ejercicio"] for h in header_candidate):
+            df.columns = header_candidate
+            df = df[1:]
+        else:
+            # Si no hay encabezado, generamos encabezados genéricos
+            df.columns = [f"col_{i}" for i in range(len(df.columns))]
+
+        return df
 
     raise ValidationError("Tipo no soportado.")
+
 
 
 def _extraer_valor(df_row, col_name, default=None):
@@ -610,18 +642,11 @@ def _leer_archivo_a_dataframe_generico(file_obj, filename, delimiter=","):
         return pd.read_excel(file_obj)
 
     if ext == ".pdf":
-        rows = []
-        with pdfplumber.open(file_obj) as pdf:
-            for page in pdf.pages:
-                text = page.extract_text() or ""
-                for line in text.split("\n"):
-                    if "|" in line:
-                        rows.append([c.strip() for c in line.split("|")])
-        if not rows:
-            raise ValidationError("No se pudo extraer tabla válida desde el PDF.")
+        rows = _parse_pdf_text_to_rows(file_obj)
         return pd.DataFrame(rows)
 
     raise ValidationError(f"No se soporta extensión: {ext}")
+
 
 
 def convertir_archivo_generico(file_obj, filename: str, formato_destino: str, delimiter=","):
