@@ -350,6 +350,58 @@ def notificar_resultado_archivo(archivo_carga):
     )
 
 
+# ============================================================
+#  Helper: interpretar factor_8..19 como MONTOS
+# ============================================================
+def _calcular_factores_desde_montos(row, factor_fields, errores):
+    """
+    Interpreta los campos factor_8..factor_19 como MONTOS brutos y
+    devuelve un dict con factores normalizados (que suman ~1).
+    Si la suma de montos es 0, agrega un error y devuelve None.
+    """
+    montos = {}
+    for fname in factor_fields:
+        valor_bruto = row.get(fname, "")
+
+        try:
+            monto = _to_decimal(valor_bruto)
+
+            # _to_decimal(""), None, NaN -> None -> lo tratamos como 0
+            if monto is None:
+                monto = Decimal("0")
+
+            if monto < 0:
+                errores.setdefault(fname, []).append(
+                    "El monto no puede ser negativo."
+                )
+
+            montos[fname] = monto
+
+        except ValidationError as e:
+            errores.setdefault(fname, []).append(str(e))
+
+    total = sum(montos.values(), Decimal("0"))
+
+    if total <= 0:
+        errores.setdefault("factores", []).append(
+            "La suma de montos de factores es 0; "
+            "no se pueden calcular factores normalizados."
+        )
+        return None
+
+    escala = Decimal("0.0001")
+    factores = {}
+
+    for fname, monto in montos.items():
+        valor = (monto / total).quantize(escala)
+        factores[fname] = valor
+
+    return factores
+
+
+# ============================================================
+#  Procesamiento estándar (modo FACTOR con autodetección de MONTO)
+# ============================================================
 def procesar_archivo_carga(archivo_carga):
     """
     Procesa un ArchivoCarga:
@@ -438,7 +490,7 @@ def procesar_archivo_carga(archivo_carga):
                     "This field cannot be blank."
                 )
 
-            # Procesar factores 8–19 como FACTORES (modo actual)
+            # 1) Leer factor_8..factor_19 tal cual (modo FACTOR)
             factores = {}
             for fname in factor_fields:
                 valor_bruto = row.get(fname, "")
@@ -455,7 +507,33 @@ def procesar_archivo_carga(archivo_carga):
                 except ValidationError as e:
                     errores.setdefault(fname, []).append(str(e))
 
-            # Determinar país (explícito o por detección)
+            # 2) Autodetección: ¿parecen MONTOS en vez de FACTORES?
+            #    - si algún valor > 1
+            #    - o la suma de todos > 1.0001
+            if not errores:
+                valores = list(factores.values())
+                total_factores = sum(valores, Decimal("0"))
+                max_factor = max(valores) if valores else Decimal("0")
+
+                if max_factor > Decimal("1") or total_factores > Decimal("1.0001"):
+                    factores_monto = _calcular_factores_desde_montos(
+                        row, factor_fields, errores
+                    )
+
+                    if factores_monto is None:
+                        rechazados += 1
+                        errores_por_fila.append(
+                            {
+                                "fila": fila_numero,
+                                "error": errores,
+                                "data": data_fila,
+                            }
+                        )
+                        continue
+
+                    factores = factores_monto  # ahora sí son proporciones [0,1]
+
+            # 3) Determinar país (explícito o por detección)
             pais_obj = None
             pais_valor = _safe_strip(row.get("pais"))
 
@@ -492,32 +570,44 @@ def procesar_archivo_carga(archivo_carga):
                 continue
 
             # Crear / actualizar calificación
-            calif, created = CalificacionTributaria.objects.get_or_create(
+            calif = CalificacionTributaria.objects.filter(
                 corredor=archivo_carga.corredor,
                 identificador_cliente=identificador_cliente,
                 instrumento=instrumento,
-                defaults=dict(
-                    pais=pais_obj,
-                    pais_detectado=pais_obj,
-                    observaciones=observaciones,
-                    archivo_origen=archivo_carga,
-                    factor_actualizacion=factor_actualizacion,
-                    **factores,
-                ),
-            )
+            ).first()
 
-            if created:
+            if not calif:
+                calif = CalificacionTributaria(
+                    corredor=archivo_carga.corredor,
+                    identificador_cliente=identificador_cliente,
+                    instrumento=instrumento,
+                )
                 nuevos += 1
             else:
-                calif.pais = pais_obj
-                calif.pais_detectado = pais_obj
-                calif.observaciones = observaciones
-                calif.archivo_origen = archivo_carga
-                calif.factor_actualizacion = factor_actualizacion
-                for k, v in factores.items():
-                    setattr(calif, k, v)
-                calif.save()
                 actualizados += 1
+
+            calif.pais = pais_obj
+            calif.pais_detectado = pais_obj
+            calif.observaciones = observaciones
+            calif.archivo_origen = archivo_carga
+            calif.factor_actualizacion = factor_actualizacion
+
+            for k, v in factores.items():
+                setattr(calif, k, v)
+
+            try:
+                calif.full_clean()
+                calif.save()
+            except ValidationError as e:
+                rechazados += 1
+                errores_por_fila.append(
+                    {
+                        "fila": fila_numero,
+                        "error": getattr(e, "message_dict", str(e)),
+                        "data": data_fila,
+                    }
+                )
+                continue
 
         # Fin del procesamiento OK (con o sin rechazados)
         finished = timezone.now()
@@ -545,7 +635,7 @@ def procesar_archivo_carga(archivo_carga):
         notificar_resultado_archivo(archivo_carga)
 
     except Exception as e:
-        # Cualquier error inesperado
+        # Cualquier error inesperado a nivel general del job
         finished = timezone.now()
         elapsed = (finished - started).total_seconds()
         archivo_carga.finished_at = finished
@@ -573,56 +663,7 @@ def procesar_archivo_carga(archivo_carga):
 
 
 # ============================================================
-#  NUEVO: helper para interpretar factor_8..19 como MONTOS
-# ============================================================
-def _calcular_factores_desde_montos(row, factor_fields, errores):
-    """
-    Interpreta los campos factor_8..factor_19 como MONTOS brutos y
-    devuelve un dict con factores normalizados (que suman ~1).
-    Si la suma de montos es 0, agrega un error y devuelve None.
-    """
-    montos = {}
-    for fname in factor_fields:
-        valor_bruto = row.get(fname, "")
-
-        try:
-            monto = _to_decimal(valor_bruto)
-
-            # _to_decimal(""), None, NaN -> None -> lo tratamos como 0
-            if monto is None:
-                monto = Decimal("0")
-
-            if monto < 0:
-                errores.setdefault(fname, []).append(
-                    "El monto no puede ser negativo."
-                )
-
-            montos[fname] = monto
-
-        except ValidationError as e:
-            errores.setdefault(fname, []).append(str(e))
-
-    total = sum(montos.values(), Decimal("0"))
-
-    if total <= 0:
-        errores.setdefault("factores", []).append(
-            "La suma de montos de factores es 0; "
-            "no se pueden calcular factores normalizados."
-        )
-        return None
-
-    escala = Decimal("0.0001")
-    factores = {}
-
-    for fname, monto in montos.items():
-        valor = (monto / total).quantize(escala)
-        factores[fname] = valor
-
-    return factores
-
-
-# ============================================================
-#  NUEVO: procesamiento por MONTO (normaliza factores)
+#  Procesamiento explícito MONTO (usa montos -> factores)
 # ============================================================
 def procesar_archivo_carga_monto(archivo_carga):
     """
@@ -707,12 +748,11 @@ def procesar_archivo_carga_monto(archivo_carga):
                     "This field cannot be blank."
                 )
 
-            # Interpretar factor_8..19 como MONTOS y calcular factores normalizados
+            # Interpretar factor_8..19 como MONTOS y calcular factores
             factores = _calcular_factores_desde_montos(
                 row, factor_fields, errores
             )
 
-            # Si hubo error al calcular factores, se rechaza fila
             if factores is None:
                 rechazados += 1
                 errores_por_fila.append(
@@ -748,7 +788,6 @@ def procesar_archivo_carga_monto(archivo_carga):
                         "No se pudo determinar el país a partir de los datos."
                     )
 
-            # Si hay errores de validación de campos base o país, rechazamos fila
             if errores:
                 rechazados += 1
                 errores_por_fila.append(
@@ -768,7 +807,6 @@ def procesar_archivo_carga_monto(archivo_carga):
             ).first()
 
             if not calif:
-                # Crear nueva
                 calif = CalificacionTributaria(
                     corredor=archivo_carga.corredor,
                     identificador_cliente=identificador_cliente,
@@ -778,7 +816,6 @@ def procesar_archivo_carga_monto(archivo_carga):
             else:
                 actualizados += 1
 
-            # Actualizar campos comunes
             calif.pais = pais_obj
             calif.pais_detectado = pais_obj
             calif.observaciones = observaciones
@@ -803,7 +840,6 @@ def procesar_archivo_carga_monto(archivo_carga):
                 )
                 continue
 
-        # Fin del procesamiento OK (con o sin rechazados)
         finished = timezone.now()
         elapsed = (finished - started).total_seconds()
 

@@ -10,7 +10,6 @@ from decimal import Decimal
 from django.forms.models import model_to_dict
 from django.core.exceptions import ValidationError as DjangoValidationError
 
-
 from .models import (
     Pais,
     Corredor,
@@ -375,21 +374,17 @@ class CalificacionTributariaViewSet(viewsets.ModelViewSet):
             "factor_16", "factor_17", "factor_18", "factor_19",
         ]
 
-        # Usaremos 4 decimales máximo (max_digits=5, decimal_places=4)
         escala = Decimal("0.0001")
 
-        # 1) calculamos valores normalizados y redondeados
         valores = []
         for monto in montos:
             bruto = (monto or Decimal("0")) / total
-            valor = bruto.quantize(escala)  # 4 decimales máximo
+            valor = bruto.quantize(escala)
             valores.append(valor)
 
-        # 2) asignamos a los campos
         for nombre, valor in zip(nombres, valores):
             setattr(calif, nombre, valor)
 
-        # 3) intentamos guardar capturando errores de validación del modelo
         try:
             calif.save()
         except DjangoValidationError as e:
@@ -398,7 +393,6 @@ class CalificacionTributariaViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # 4) calculamos la suma final para devolverla
         suma = sum(valores, Decimal("0"))
 
         return Response(
@@ -546,7 +540,8 @@ class ArchivoCargaViewSet(viewsets.ModelViewSet):
             )
 
         # 1) Leer tipo_carga desde el formulario (FACTOR / MONTO)
-        tipo_carga = request.data.get("tipo_carga", "FACTOR")
+        tipo_carga_raw = request.data.get("tipo_carga", "FACTOR") or "FACTOR"
+        tipo_carga = tipo_carga_raw.strip().upper()
         if tipo_carga not in ["FACTOR", "MONTO"]:
             tipo_carga = "FACTOR"
 
@@ -591,7 +586,6 @@ class ArchivoCargaViewSet(viewsets.ModelViewSet):
             elif archivo_carga.tipo_carga == "MONTO":
                 procesar_archivo_carga_monto(archivo_carga)
         except Exception:
-            # Si algo falla dentro, el propio servicio deja estado_proceso en error
             archivo_carga.refresh_from_db()
 
         archivo_carga.refresh_from_db()
@@ -613,7 +607,7 @@ class ArchivoCargaViewSet(viewsets.ModelViewSet):
         )
 
     # ======================================================
-    # 5.2 Procesar job (usa lógica actual de FACTOR)
+    # 5.2 Procesar job (usa FACTOR / MONTO según tipo_carga)
     # ======================================================
     @action(detail=True, methods=["post"], url_path="procesar")
     def procesar(self, request, pk=None):
@@ -627,7 +621,10 @@ class ArchivoCargaViewSet(viewsets.ModelViewSet):
             if not (perfil and perfil.rol == "corredor" and job.corredor_id == perfil.corredor_id):
                 raise PermissionDenied("No autorizado para procesar este job.")
 
-        procesar_archivo_carga(job)
+        if job.tipo_carga == "MONTO":
+            procesar_archivo_carga_monto(job)
+        else:
+            procesar_archivo_carga(job)
 
         job.refresh_from_db()
         serializer = self.get_serializer(job)
