@@ -129,43 +129,31 @@ class CalificacionTributariaViewSet(viewsets.ModelViewSet):
         user = self.request.user
         qs = CalificacionTributaria.objects.select_related("corredor", "pais").all()
 
-        # --------- permisos por tipo de usuario ----------
         if not user.is_authenticated:
             return qs.none()
 
-        if user.is_superuser or user.is_staff:
-            # ve todo
-            pass
-        else:
+        if not (user.is_superuser or user.is_staff):
             perfil = getattr(user, "perfil", None)
             if not perfil:
                 return qs.none()
-
             if perfil.rol == "corredor":
                 qs = qs.filter(corredor=perfil.corredor)
-            elif perfil.rol == "auditor":
-                # ve todo, pero solo lectura
-                pass
-            else:
+            elif perfil.rol != "auditor":
                 return qs.none()
 
         params = self.request.query_params
 
-        # --------- filtros nuevos ----------
         mercado = params.get("mercado")
         ejercicio = params.get("ejercicio")
         estado = params.get("estado")
 
         if mercado:
             qs = qs.filter(mercado__iexact=mercado)
-
         if ejercicio:
             qs = qs.filter(ejercicio=ejercicio)
-
         if estado:
             qs = qs.filter(estado__iexact=estado)
 
-        # --------- filtros existentes ----------
         pais_id = params.get("pais_id")
         instrumento = params.get("instrumento")
         cliente = params.get("cliente")
@@ -183,10 +171,8 @@ class CalificacionTributariaViewSet(viewsets.ModelViewSet):
 
         if instrumento:
             qs = qs.filter(instrumento__icontains=instrumento)
-
         if cliente:
             qs = qs.filter(identificador_cliente__icontains=cliente)
-
         if moneda:
             qs = qs.filter(moneda__iexact=moneda)
 
@@ -199,14 +185,12 @@ class CalificacionTributariaViewSet(viewsets.ModelViewSet):
 
         if creado_desde:
             qs = qs.filter(creado_en__date__gte=creado_desde)
-
         if creado_hasta:
             qs = qs.filter(creado_en__date__lte=creado_hasta)
 
         return qs.order_by("-creado_en")
 
-    # --------- helper para detectar país y setear pais_detectado ----------
-    def _detectar_y_setear_pais_detectado(self, calif: CalificacionTributaria):
+    def _detectar_y_setear_pais_detectado(self, calif):
         texto_obs = (calif.observaciones or "").strip()
         if not texto_obs:
             return
@@ -222,10 +206,7 @@ class CalificacionTributariaViewSet(viewsets.ModelViewSet):
         if not iso3_detectado:
             return
 
-        pais_detectado = Pais.objects.filter(
-            codigo_iso3__iexact=iso3_detectado
-        ).first()
-
+        pais_detectado = Pais.objects.filter(codigo_iso3__iexact=iso3_detectado).first()
         if pais_detectado and calif.pais_detectado_id != pais_detectado.id:
             calif.pais_detectado = pais_detectado
             calif.save(update_fields=["pais_detectado"])
@@ -243,7 +224,6 @@ class CalificacionTributariaViewSet(viewsets.ModelViewSet):
                 creado_por=user,
                 actualizado_por=user,
             )
-
         self._detectar_y_setear_pais_detectado(calif)
 
     def perform_update(self, serializer):
@@ -251,9 +231,6 @@ class CalificacionTributariaViewSet(viewsets.ModelViewSet):
         calif = serializer.save(actualizado_por=user)
         self._detectar_y_setear_pais_detectado(calif)
 
-    # ======================================================
-    # 4.2 Recalcular país (detalle)
-    # ======================================================
     @action(detail=True, methods=["post"], url_path="recalcular-pais")
     def recalcular_pais(self, request, pk=None):
         calif = self.get_object()
@@ -295,16 +272,11 @@ class CalificacionTributariaViewSet(viewsets.ModelViewSet):
             }
         )
 
-    # ======================================================
-    # 4.3 Recalcular país detectado masivo (detail=False)
-    # ======================================================
     @action(detail=False, methods=["post"], url_path="recalcular-pais-detectado")
     def recalcular_pais_detectado(self, request):
         user = self.request.user
         if not (user.is_staff or user.is_superuser):
-            raise PermissionDenied(
-                "Solo staff puede recalcular pais_detectado masivamente."
-            )
+            raise PermissionDenied("Solo staff puede recalcular pais_detectado masivamente.")
 
         qs = self.get_queryset().filter(
             pais_detectado__isnull=True
@@ -331,10 +303,7 @@ class CalificacionTributariaViewSet(viewsets.ModelViewSet):
                 sin_detectar += 1
                 continue
 
-            pais_detectado = Pais.objects.filter(
-                codigo_iso3__iexact=iso3_detectado
-            ).first()
-
+            pais_detectado = Pais.objects.filter(codigo_iso3__iexact=iso3_detectado).first()
             if not pais_detectado:
                 sin_detectar += 1
                 continue
@@ -352,9 +321,6 @@ class CalificacionTributariaViewSet(viewsets.ModelViewSet):
             }
         )
 
-    # ======================================================
-    # 4.2 Calcular factores (normaliza para que sumen 1) en detalle
-    # ======================================================
     @action(detail=True, methods=["post"], url_path="calcular-factores")
     def calcular_factores(self, request, pk=None):
         calif = self.get_object()
@@ -392,99 +358,11 @@ class CalificacionTributariaViewSet(viewsets.ModelViewSet):
         try:
             calif.save()
         except DjangoValidationError as e:
-            return Response(
-                {"detail": e.messages},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            return Response({"detail": e.messages}, status=status.HTTP_400_BAD_REQUEST)
 
         suma = sum(valores, Decimal("0"))
 
-        return Response(
-            {
-                "id": calif.id,
-                "suma_factores": str(suma),
-            }
-        )
-
-    # ======================================================
-    # 4.2 Aprobar calificación
-    # ======================================================
-    @action(detail=True, methods=["post"], url_path="aprobar")
-    def aprobar(self, request, pk=None):
-        calif = self.get_object()
-        user = request.user
-        perfil = getattr(user, "perfil", None)
-
-        if not (user.is_staff or user.is_superuser or (perfil and perfil.rol == "admin")):
-            raise PermissionDenied("Solo admin/staff puede aprobar calificaciones.")
-
-        calif.estado = "aprobada"
-        calif.actualizado_por = user
-        calif.save(update_fields=["estado", "actualizado_por", "actualizado_en"])
-
-        HistorialCalificacion.objects.create(
-            calificacion=calif,
-            usuario=user,
-            accion="aprobar",
-            descripcion_cambio="Calificación marcada como aprobada.",
-        )
-
-        serializer = self.get_serializer(calif)
-        return Response(serializer.data)
-
-    # ======================================================
-    # 4.2 Copiar calificación
-    # ======================================================
-    @action(detail=True, methods=["post"], url_path="copiar")
-    def copiar(self, request, pk=None):
-        calif = self.get_object()
-        user = request.user
-
-        data = model_to_dict(
-            calif,
-            exclude=[
-                "id",
-                "creado_en",
-                "actualizado_en",
-                "archivo_origen",
-                "creado_por",
-                "actualizado_por",
-            ],
-        )
-
-        nuevo_ejercicio = request.data.get("ejercicio")
-        nuevo_mercado = request.data.get("mercado")
-
-        if nuevo_ejercicio is not None:
-            data["ejercicio"] = nuevo_ejercicio
-        if nuevo_mercado is not None:
-            data["mercado"] = nuevo_mercado
-
-        data["estado"] = "pendiente"
-        data["creado_por"] = user
-        data["actualizado_por"] = user
-
-        nueva_calif = CalificacionTributaria.objects.create(**data)
-
-        HistorialCalificacion.objects.create(
-            calificacion=nueva_calif,
-            usuario=user,
-            accion="copiar",
-            descripcion_cambio=f"Copia de calificación {calif.id}.",
-        )
-
-        serializer = self.get_serializer(nueva_calif)
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
-
-    # ======================================================
-    # 6. Historial de una calificación específica
-    # ======================================================
-    @action(detail=True, methods=["get"], url_path="historial")
-    def historial(self, request, pk=None):
-        calif = self.get_object()
-        eventos = calif.historial.select_related("usuario").all()
-        serializer = HistorialCalificacionSerializer(eventos, many=True)
-        return Response(serializer.data)
+        return Response({"id": calif.id, "suma_factores": str(suma)})
 
 
 class ArchivoCargaViewSet(viewsets.ModelViewSet):
@@ -513,65 +391,47 @@ class ArchivoCargaViewSet(viewsets.ModelViewSet):
         user = self.request.user
         if user.is_superuser or user.is_staff:
             serializer.save(submitted_by=user)
-            return
-        perfil = getattr(user, "perfil", None)
-        if not perfil or perfil.rol != "corredor":
-            raise PermissionDenied("Solo corredores pueden crear cargas.")
-        serializer.save(
-            corredor=perfil.corredor,
-            submitted_by=user,
-        )
+        else:
+            perfil = getattr(user, "perfil", None)
+            if not perfil or perfil.rol != "corredor":
+                raise PermissionDenied("Solo corredores pueden crear cargas.")
+            serializer.save(
+                corredor=perfil.corredor,
+                submitted_by=user,
+            )
 
-    # ===========================
-    # SUBIR ARCHIVO (FACTOR / MONTO)
-    # ===========================
     @action(detail=False, methods=["post"], url_path="subir")
     def subir_archivo(self, request):
         user = request.user
         if not user.is_authenticated:
             raise PermissionDenied("Autenticación requerida.")
         perfil = getattr(user, "perfil", None)
-        if not (user.is_superuser or user.is_staff) and not (
-            perfil and perfil.rol == "corredor"
-        ):
+        if not (user.is_superuser or user.is_staff) and not (perfil and perfil.rol == "corredor"):
             raise PermissionDenied("No autorizado.")
 
         upload = request.FILES.get("archivo")
         if not upload:
-            return Response(
-                {"detail": "Debe adjuntar archivo."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            return Response({"detail": "Debe adjuntar archivo."}, status=status.HTTP_400_BAD_REQUEST)
 
-        # 1) Leer tipo_carga desde el formulario (FACTOR / MONTO)
         tipo_carga_raw = request.data.get("tipo_carga", "FACTOR") or "FACTOR"
         tipo_carga = tipo_carga_raw.strip().upper()
         if tipo_carga not in ["FACTOR", "MONTO"]:
             tipo_carga = "FACTOR"
 
-        # Resolver corredor
         if user.is_superuser or user.is_staff:
             corredor_id = request.data.get("corredor")
             if not corredor_id:
-                return Response(
-                    {"detail": "Debe indicar corredor."},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
+                return Response({"detail": "Debe indicar corredor."}, status=status.HTTP_400_BAD_REQUEST)
             try:
                 corredor = Corredor.objects.get(pk=corredor_id)
             except Corredor.DoesNotExist:
-                return Response(
-                    {"detail": "Corredor no encontrado."},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
+                return Response({"detail": "Corredor no encontrado."}, status=status.HTTP_400_BAD_REQUEST)
         else:
             corredor = perfil.corredor
 
-        # Guardar archivo físico
         filename = default_storage.save(f"cargas/{upload.name}", upload)
         ruta = default_storage.path(filename)
 
-        #  2) Crear job con tipo_carga correcto
         archivo_carga = ArchivoCarga.objects.create(
             corredor=corredor,
             nombre_original=upload.name,
@@ -582,15 +442,6 @@ class ArchivoCargaViewSet(viewsets.ModelViewSet):
             submitted_by=user,
             tipo_carga=tipo_carga,
         )
-
-        #  3) Procesar automáticamente según tipo_carga
-        try:
-            if archivo_carga.tipo_carga == "FACTOR":
-                procesar_archivo_carga(archivo_carga)
-            elif archivo_carga.tipo_carga == "MONTO":
-                procesar_archivo_carga_monto(archivo_carga)
-        except Exception:
-            archivo_carga.refresh_from_db()
 
         archivo_carga.refresh_from_db()
         serializer = self.get_serializer(archivo_carga)
@@ -610,9 +461,6 @@ class ArchivoCargaViewSet(viewsets.ModelViewSet):
             }
         )
 
-    # ======================================================
-    # 5.2 Procesar job (usa FACTOR / MONTO según tipo_carga)
-    # ======================================================
     @action(detail=True, methods=["post"], url_path="procesar")
     def procesar(self, request, pk=None):
         job = self.get_object()
@@ -625,73 +473,32 @@ class ArchivoCargaViewSet(viewsets.ModelViewSet):
             if not (perfil and perfil.rol == "corredor" and job.corredor_id == perfil.corredor_id):
                 raise PermissionDenied("No autorizado para procesar este job.")
 
-        if job.tipo_carga == "MONTO":
-            procesar_archivo_carga_monto(job)
-        else:
-            procesar_archivo_carga(job)
+        try:
+            with open(job.ruta_almacenamiento, "rb") as f:
+                corredor = job.corredor
+
+                if job.tipo_carga == "MONTO":
+                    procesar_archivo_carga_monto(job, f, corredor)
+                else:
+                    procesar_archivo_carga(job, f, corredor)
+
+        except FileNotFoundError:
+            return Response(
+                {"detail": f"No se encontró el archivo físico: {job.ruta_almacenamiento}"},
+                status=500
+            )
+        except Exception as e:
+            return Response(
+                {"detail": f"Error procesando archivo: {str(e)}"},
+                status=500
+            )
 
         job.refresh_from_db()
         serializer = self.get_serializer(job)
         return Response(serializer.data)
-
-    @action(detail=True, methods=["post"], url_path="procesar-factor")
-    def procesar_factor(self, request, pk=None):
-        job = self.get_object()
-        if job.tipo_carga != "FACTOR":
-            return Response(
-                {"detail": "Este job no es de tipo FACTOR."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        return self.procesar(request, pk)
-
-    @action(detail=True, methods=["post"], url_path="procesar-monto")
-    def procesar_monto(self, request, pk=None):
-        job = self.get_object()
-
-        user = request.user
-        if not user.is_authenticated:
-            raise PermissionDenied("Autenticación requerida.")
-        if not (user.is_superuser or user.is_staff):
-            perfil = getattr(user, "perfil", None)
-            if not (perfil and perfil.rol == "corredor" and job.corredor_id == perfil.corredor_id):
-                raise PermissionDenied("No autorizado para procesar este job.")
-
-        if job.tipo_carga != "MONTO":
-            return Response(
-                {"detail": "Este job no es de tipo MONTO."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        procesar_archivo_carga_monto(job)
-
-        job.refresh_from_db()
-        serializer = self.get_serializer(job)
-        return Response(serializer.data)
-
-    @action(detail=True, methods=["post"], url_path="calcular-factores")
-    def calcular_factores_desde_job(self, request, pk=None):
-        job = self.get_object()
-        if job.tipo_carga != "MONTO":
-            return Response(
-                {"detail": "Este job no es de tipo MONTO."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        return Response(
-            {
-                "detail": "Calcular factores para cargas por MONTO se realiza automáticamente "
-                          "al procesar el job (subir o /procesar-monto)."
-            },
-            status=status.HTTP_200_OK,
-        )
 
 
 class HistorialCalificacionViewSet(viewsets.ReadOnlyModelViewSet):
-    """
-    Permite consultar el historial de calificaciones.
-    Solo lectura: list y retrieve.
-    Se puede filtrar por ?calificacion=<id>
-    """
     serializer_class = HistorialCalificacionSerializer
     permission_classes = [permissions.IsAuthenticated]
 
@@ -704,14 +511,6 @@ class HistorialCalificacionViewSet(viewsets.ReadOnlyModelViewSet):
 
 
 class ConversionArchivoView(APIView):
-    """
-    Endpoint para conversión de archivos.
-    - POST /api/conversion/archivo/?accion=preview
-      -> JSON con columns, rows, total_rows
-    - POST /api/conversion/archivo/?accion=convertir
-      -> descarga del archivo convertido
-    """
-
     permission_classes = [permissions.IsAuthenticated]
     parser_classes = [MultiPartParser, FormParser]
 
@@ -720,16 +519,12 @@ class ConversionArchivoView(APIView):
         file_obj = request.FILES.get("archivo")
         formato_destino = request.data.get("formato_destino")
 
-        # Delimitador robusto: si viene vacío o raro, se corrige aquí
         delimitador = (request.data.get("delimitador") or ",").strip()
         if len(delimitador) != 1:
             delimitador = ","
 
         if not file_obj:
-            return Response(
-                {"detail": "No se recibió ningún archivo."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            return Response({"detail": "No se recibió ningún archivo."}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
             if accion == "preview":
@@ -753,16 +548,9 @@ class ConversionArchivoView(APIView):
                 return response
 
             else:
-                return Response(
-                    {"detail": "Acción no válida. Use 'preview' o 'convertir'."},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
+                return Response({"detail": "Acción no válida. Use 'preview' o 'convertir'."}, status=400)
 
         except DjangoValidationError as e:
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
-
         except Exception as e:
-            return Response(
-                {"detail": f"Error inesperado: {e}"},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
+            return Response({"detail": f"Error inesperado: {e}"}, status=500)
