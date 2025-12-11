@@ -136,6 +136,7 @@ class CalificacionTributariaViewSet(viewsets.ModelViewSet):
             perfil = getattr(user, "perfil", None)
             if not perfil:
                 return qs.none()
+
             if perfil.rol == "corredor":
                 qs = qs.filter(corredor=perfil.corredor)
             elif perfil.rol != "auditor":
@@ -171,8 +172,10 @@ class CalificacionTributariaViewSet(viewsets.ModelViewSet):
 
         if instrumento:
             qs = qs.filter(instrumento__icontains=instrumento)
+
         if cliente:
             qs = qs.filter(identificador_cliente__icontains=cliente)
+
         if moneda:
             qs = qs.filter(moneda__iexact=moneda)
 
@@ -185,31 +188,11 @@ class CalificacionTributariaViewSet(viewsets.ModelViewSet):
 
         if creado_desde:
             qs = qs.filter(creado_en__date__gte=creado_desde)
+
         if creado_hasta:
             qs = qs.filter(creado_en__date__lte=creado_hasta)
 
         return qs.order_by("-creado_en")
-
-    def _detectar_y_setear_pais_detectado(self, calif):
-        texto_obs = (calif.observaciones or "").strip()
-        if not texto_obs:
-            return
-
-        detector = DetectorPaisTributario()
-        row = {
-            "identificador_cliente": calif.identificador_cliente,
-            "instrumento": calif.instrumento,
-            "observaciones": texto_obs,
-        }
-
-        iso3_detectado, confianza = detector.detectar(row)
-        if not iso3_detectado:
-            return
-
-        pais_detectado = Pais.objects.filter(codigo_iso3__iexact=iso3_detectado).first()
-        if pais_detectado and calif.pais_detectado_id != pais_detectado.id:
-            calif.pais_detectado = pais_detectado
-            calif.save(update_fields=["pais_detectado"])
 
     def perform_create(self, serializer):
         user = self.request.user
@@ -224,145 +207,70 @@ class CalificacionTributariaViewSet(viewsets.ModelViewSet):
                 creado_por=user,
                 actualizado_por=user,
             )
-        self._detectar_y_setear_pais_detectado(calif)
 
     def perform_update(self, serializer):
         user = self.request.user
-        calif = serializer.save(actualizado_por=user)
-        self._detectar_y_setear_pais_detectado(calif)
+        serializer.save(actualizado_por=user)
 
-    @action(detail=True, methods=["post"], url_path="recalcular-pais")
-    def recalcular_pais(self, request, pk=None):
+    @action(detail=True, methods=["post"], url_path="aprobar")
+    def aprobar(self, request, pk=None):
         calif = self.get_object()
+        user = request.user
+        perfil = getattr(user, "perfil", None)
 
-        texto = request.data.get("texto")
-        if not texto:
-            texto = calif.observaciones or ""
-        if not texto.strip():
-            return Response(
-                {"detail": "No hay texto disponible para detección."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        if not (user.is_staff or user.is_superuser or (perfil and perfil.rol == "admin")):
+            raise PermissionDenied("Solo admin/staff puede aprobar calificaciones.")
 
-        row = {
-            "identificador_cliente": calif.identificador_cliente,
-            "instrumento": calif.instrumento,
-            "observaciones": texto,
-        }
+        calif.estado = "aprobada"
+        calif.actualizado_por = user
+        calif.save(update_fields=["estado", "actualizado_por", "actualizado_en"])
 
-        detector = DetectorPaisTributario()
-        iso3_detectado, confianza = detector.detectar(row)
-
-        pais_detectado = None
-        if iso3_detectado:
-            pais_detectado = Pais.objects.filter(
-                codigo_iso3__iexact=iso3_detectado
-            ).first()
-
-        if pais_detectado:
-            calif.pais_detectado = pais_detectado
-            calif.save(update_fields=["pais_detectado"])
-
-        return Response(
-            {
-                "id": calif.id,
-                "pais_detectado": str(pais_detectado) if pais_detectado else None,
-                "iso3_detectado": iso3_detectado,
-                "confianza": confianza,
-            }
+        HistorialCalificacion.objects.create(
+            calificacion=calif,
+            usuario=user,
+            accion="aprobar",
+            descripcion_cambio="Calificación aprobada.",
         )
 
-    @action(detail=False, methods=["post"], url_path="recalcular-pais-detectado")
-    def recalcular_pais_detectado(self, request):
-        user = self.request.user
-        if not (user.is_staff or user.is_superuser):
-            raise PermissionDenied("Solo staff puede recalcular pais_detectado masivamente.")
+        return Response(self.get_serializer(calif).data)
 
-        qs = self.get_queryset().filter(
-            pais_detectado__isnull=True
-        ).exclude(
-            observaciones__isnull=True
-        ).exclude(
-            observaciones__exact=""
-        )
-
-        total = qs.count()
-        actualizados = 0
-        sin_detectar = 0
-
-        detector = DetectorPaisTributario()
-
-        for calif in qs:
-            row = {
-                "identificador_cliente": calif.identificador_cliente,
-                "instrumento": calif.instrumento,
-                "observaciones": calif.observaciones or "",
-            }
-            iso3_detectado, confianza = detector.detectar(row)
-            if not iso3_detectado:
-                sin_detectar += 1
-                continue
-
-            pais_detectado = Pais.objects.filter(codigo_iso3__iexact=iso3_detectado).first()
-            if not pais_detectado:
-                sin_detectar += 1
-                continue
-
-            if calif.pais_detectado_id != pais_detectado.id:
-                calif.pais_detectado = pais_detectado
-                calif.save(update_fields=["pais_detectado"])
-                actualizados += 1
-
-        return Response(
-            {
-                "total": total,
-                "actualizados": actualizados,
-                "sin_detectar": sin_detectar,
-            }
-        )
-
-    @action(detail=True, methods=["post"], url_path="calcular-factores")
-    def calcular_factores(self, request, pk=None):
+    @action(detail=True, methods=["post"], url_path="copiar")
+    def copiar(self, request, pk=None):
         calif = self.get_object()
+        user = request.user
 
-        montos = [
-            calif.factor_8, calif.factor_9, calif.factor_10, calif.factor_11,
-            calif.factor_12, calif.factor_13, calif.factor_14, calif.factor_15,
-            calif.factor_16, calif.factor_17, calif.factor_18, calif.factor_19,
-        ]
-        total = sum((m or Decimal("0") for m in montos), Decimal("0"))
+        data = model_to_dict(
+            calif,
+            exclude=[
+                "id", "creado_en", "actualizado_en", "archivo_origen",
+                "creado_por", "actualizado_por"
+            ],
+        )
 
-        if total <= Decimal("0"):
-            return Response(
-                {"detail": "La suma actual de factores es 0; no se puede normalizar."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        if request.data.get("ejercicio"):
+            data["ejercicio"] = request.data["ejercicio"]
+        if request.data.get("mercado"):
+            data["mercado"] = request.data["mercado"]
 
-        nombres = [
-            "factor_8", "factor_9", "factor_10", "factor_11",
-            "factor_12", "factor_13", "factor_14", "factor_15",
-            "factor_16", "factor_17", "factor_18", "factor_19",
-        ]
+        data["estado"] = "pendiente"
+        data["creado_por"] = user
+        data["actualizado_por"] = user
 
-        escala = Decimal("0.0001")
+        nueva = CalificacionTributaria.objects.create(**data)
 
-        valores = []
-        for monto in montos:
-            bruto = (monto or Decimal("0")) / total
-            valor = bruto.quantize(escala)
-            valores.append(valor)
+        HistorialCalificacion.objects.create(
+            calificacion=nueva,
+            usuario=user,
+            accion="copiar",
+            descripcion_cambio=f"Copia de calificación {calif.id}.",
+        )
 
-        for nombre, valor in zip(nombres, valores):
-            setattr(calif, nombre, valor)
+        return Response(self.get_serializer(nueva).data, status=201)
 
-        try:
-            calif.save()
-        except DjangoValidationError as e:
-            return Response({"detail": e.messages}, status=status.HTTP_400_BAD_REQUEST)
-
-        suma = sum(valores, Decimal("0"))
-
-        return Response({"id": calif.id, "suma_factores": str(suma)})
+    @action(detail=True, methods=["get"], url_path="historial")
+    def historial(self, request, pk=None):
+        eventos = self.get_object().historial.select_related("usuario")
+        return Response(HistorialCalificacionSerializer(eventos, many=True).data)
 
 
 class ArchivoCargaViewSet(viewsets.ModelViewSet):
@@ -371,61 +279,45 @@ class ArchivoCargaViewSet(viewsets.ModelViewSet):
     permission_classes = [ArchivoCargaPermission]
     parser_classes = [MultiPartParser, FormParser]
 
-    def get_queryset(self):
-        user = self.request.user
-        qs = ArchivoCarga.objects.select_related("corredor").all()
-        if not user.is_authenticated:
-            return qs.none()
-        if user.is_superuser or user.is_staff:
-            return qs
-        perfil = getattr(user, "perfil", None)
-        if not perfil:
-            return qs.none()
-        if perfil.rol == "corredor":
-            return qs.filter(corredor=perfil.corredor)
-        if perfil.rol == "auditor":
-            return qs
-        return qs.none()
-
     def perform_create(self, serializer):
         user = self.request.user
+
         if user.is_superuser or user.is_staff:
             serializer.save(submitted_by=user)
-        else:
-            perfil = getattr(user, "perfil", None)
-            if not perfil or perfil.rol != "corredor":
-                raise PermissionDenied("Solo corredores pueden crear cargas.")
-            serializer.save(
-                corredor=perfil.corredor,
-                submitted_by=user,
-            )
+            return
+
+        perfil = getattr(user, "perfil", None)
+        if not perfil or perfil.rol != "corredor":
+            raise PermissionDenied("Solo corredores pueden crear cargas.")
+
+        serializer.save(corredor=perfil.corredor, submitted_by=user)
 
     @action(detail=False, methods=["post"], url_path="subir")
     def subir_archivo(self, request):
         user = request.user
         if not user.is_authenticated:
             raise PermissionDenied("Autenticación requerida.")
+
         perfil = getattr(user, "perfil", None)
-        if not (user.is_superuser or user.is_staff) and not (perfil and perfil.rol == "corredor"):
+        if not (user.is_superuser or user.is_staff or (perfil and perfil.rol == "corredor")):
             raise PermissionDenied("No autorizado.")
 
         upload = request.FILES.get("archivo")
         if not upload:
-            return Response({"detail": "Debe adjuntar archivo."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"detail": "Debe adjuntar archivo."}, status=400)
 
-        tipo_carga_raw = request.data.get("tipo_carga", "FACTOR") or "FACTOR"
-        tipo_carga = tipo_carga_raw.strip().upper()
-        if tipo_carga not in ["FACTOR", "MONTO"]:
+        tipo_carga = (request.data.get("tipo_carga") or "FACTOR").upper()
+        if tipo_carga not in ("FACTOR", "MONTO"):
             tipo_carga = "FACTOR"
 
         if user.is_superuser or user.is_staff:
             corredor_id = request.data.get("corredor")
             if not corredor_id:
-                return Response({"detail": "Debe indicar corredor."}, status=status.HTTP_400_BAD_REQUEST)
+                return Response({"detail": "Debe indicar corredor."}, status=400)
             try:
                 corredor = Corredor.objects.get(pk=corredor_id)
             except Corredor.DoesNotExist:
-                return Response({"detail": "Corredor no encontrado."}, status=status.HTTP_400_BAD_REQUEST)
+                return Response({"detail": "Corredor no encontrado."}, status=400)
         else:
             corredor = perfil.corredor
 
@@ -443,9 +335,12 @@ class ArchivoCargaViewSet(viewsets.ModelViewSet):
             tipo_carga=tipo_carga,
         )
 
-        archivo_carga.refresh_from_db()
-        serializer = self.get_serializer(archivo_carga)
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
+        try:
+            procesar_archivo_carga(archivo_carga)
+        except Exception:
+            archivo_carga.refresh_from_db()
+
+        return Response(self.get_serializer(archivo_carga).data, status=201)
 
     @action(detail=True, methods=["get"], url_path="resumen")
     def resumen(self, request, pk=None):
@@ -460,97 +355,3 @@ class ArchivoCargaViewSet(viewsets.ModelViewSet):
                 "tiempo_procesamiento_seg": job.tiempo_procesamiento_seg,
             }
         )
-
-    @action(detail=True, methods=["post"], url_path="procesar")
-    def procesar(self, request, pk=None):
-        job = self.get_object()
-
-        user = request.user
-        if not user.is_authenticated:
-            raise PermissionDenied("Autenticación requerida.")
-        if not (user.is_superuser or user.is_staff):
-            perfil = getattr(user, "perfil", None)
-            if not (perfil and perfil.rol == "corredor" and job.corredor_id == perfil.corredor_id):
-                raise PermissionDenied("No autorizado para procesar este job.")
-
-        try:
-            with open(job.ruta_almacenamiento, "rb") as f:
-                corredor = job.corredor
-
-                if job.tipo_carga == "MONTO":
-                    procesar_archivo_carga_monto(job, f, corredor)
-                else:
-                    procesar_archivo_carga(job, f, corredor)
-
-        except FileNotFoundError:
-            return Response(
-                {"detail": f"No se encontró el archivo físico: {job.ruta_almacenamiento}"},
-                status=500
-            )
-        except Exception as e:
-            return Response(
-                {"detail": f"Error procesando archivo: {str(e)}"},
-                status=500
-            )
-
-        job.refresh_from_db()
-        serializer = self.get_serializer(job)
-        return Response(serializer.data)
-
-
-class HistorialCalificacionViewSet(viewsets.ReadOnlyModelViewSet):
-    serializer_class = HistorialCalificacionSerializer
-    permission_classes = [permissions.IsAuthenticated]
-
-    def get_queryset(self):
-        qs = HistorialCalificacion.objects.select_related("calificacion", "usuario")
-        calif_id = self.request.query_params.get("calificacion")
-        if calif_id:
-            qs = qs.filter(calificacion_id=calif_id)
-        return qs.order_by("-creado_en")
-
-
-class ConversionArchivoView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-    parser_classes = [MultiPartParser, FormParser]
-
-    def post(self, request):
-        accion = request.query_params.get("accion", "preview").lower()
-        file_obj = request.FILES.get("archivo")
-        formato_destino = request.data.get("formato_destino")
-
-        delimitador = (request.data.get("delimitador") or ",").strip()
-        if len(delimitador) != 1:
-            delimitador = ","
-
-        if not file_obj:
-            return Response({"detail": "No se recibió ningún archivo."}, status=status.HTTP_400_BAD_REQUEST)
-
-        try:
-            if accion == "preview":
-                data = generar_vista_previa_archivo(
-                    file_obj,
-                    file_obj.name,
-                    delimiter=delimitador,
-                )
-                return Response(data, status=status.HTTP_200_OK)
-
-            elif accion == "convertir":
-                buffer, out_name, mimetype = convertir_archivo_generico(
-                    file_obj,
-                    file_obj.name,
-                    formato_destino=formato_destino,
-                    delimiter=delimitador,
-                )
-
-                response = HttpResponse(buffer.getvalue(), content_type=mimetype)
-                response["Content-Disposition"] = f'attachment; filename="{out_name}"'
-                return response
-
-            else:
-                return Response({"detail": "Acción no válida. Use 'preview' o 'convertir'."}, status=400)
-
-        except DjangoValidationError as e:
-            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
-        except Exception as e:
-            return Response({"detail": f"Error inesperado: {e}"}, status=500)
