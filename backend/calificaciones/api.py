@@ -667,4 +667,19 @@ class ArchivoCargaViewSet(viewsets.ModelViewSet):
             {"detail": "Calcular factores para cargas por MONTO todavía no está implementado en el backend."},
             status=status.HTTP_501_NOT_IMPLEMENTED,
         )
+class HistorialCalificacionViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    Permite consultar el historial de calificaciones.
+    Solo lectura: list y retrieve.
+    Se puede filtrar por ?calificacion=<id>
+    """
+    serializer_class = HistorialCalificacionSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        qs = HistorialCalificacion.objects.select_related("calificacion", "usuario")
+        calif_id = self.request.query_params.get("calificacion")
+        if calif_id:
+            qs = qs.filter(calificacion_id=calif_id)
+        return qs.order_by("-creado_en")
 
