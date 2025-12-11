@@ -2,7 +2,6 @@ import os
 import io
 import re
 from decimal import Decimal
-from math import isnan
 
 import pandas as pd
 import pdfplumber
@@ -172,6 +171,34 @@ def _cargar_dataframe_desde_archivo(file_obj, nombre_archivo, delimiter=","):
         rows = _parse_pdf_text_to_rows(file_obj)
         df = pd.DataFrame(rows)
 
+        # --- NUEVO BLOQUE ESPECIAL PARA TU PDF ---
+        # Caso: todo viene en una sola columna tipo "col_0"
+        # y la primera fila tiene "identificador_cliente instrumento ..."
+        if df.shape[1] == 1:
+            first_val = str(df.iloc[0, 0]).strip().lower()
+
+            if "identificador_cliente" in first_val and "instrumento" in first_val:
+                # Cabecera separada por espacios
+                header_tokens = str(df.iloc[0, 0]).strip().split()
+
+                def ajustar_tokens(tokens, n):
+                    # Ajusta cantidad de columnas: rellena con "" o corta
+                    if len(tokens) < n:
+                        tokens = tokens + [""] * (n - len(tokens))
+                    elif len(tokens) > n:
+                        tokens = tokens[:n]
+                    return tokens
+
+                data_rows = []
+                for val in df.iloc[1:, 0]:
+                    tokens = str(val).strip().split()
+                    data_rows.append(ajustar_tokens(tokens, len(header_tokens)))
+
+                df = pd.DataFrame(data_rows, columns=header_tokens)
+                return df
+            # Si no es ese formato, seguimos con la lógica original
+        # --- FIN BLOQUE NUEVO ---
+
         header = df.iloc[0].tolist()
         if any(str(h).lower() in ["cliente", "instrumento", "mercado", "ejercicio"] for h in header):
             df.columns = header
@@ -182,6 +209,7 @@ def _cargar_dataframe_desde_archivo(file_obj, nombre_archivo, delimiter=","):
         return df
 
     raise ValidationError("Tipo no soportado.")
+
 
 
 def _extraer_valor(df_row, col, default=None):
@@ -562,7 +590,6 @@ def _leer_archivo_a_dataframe_generico(file_obj, filename, delimiter=","):
 
 
 def convertir_archivo_generico(file_obj, filename, formato_destino, delimiter=","):
-    import io
     delimiter = _sanitizar_delimitador(delimiter)
     formato = (formato_destino or "").upper().strip()
 
