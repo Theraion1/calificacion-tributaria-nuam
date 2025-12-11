@@ -522,6 +522,9 @@ class ArchivoCargaViewSet(viewsets.ModelViewSet):
             submitted_by=user,
         )
 
+    # ===========================
+    # SUBIR ARCHIVO (FACTOR / MONTO)
+    # ===========================
     @action(detail=False, methods=["post"], url_path="subir")
     def subir_archivo(self, request):
         user = request.user
@@ -540,6 +543,12 @@ class ArchivoCargaViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        # 1) Leer tipo_carga desde el formulario (FACTOR / MONTO)
+        tipo_carga = request.data.get("tipo_carga", "FACTOR")
+        if tipo_carga not in ["FACTOR", "MONTO"]:
+            tipo_carga = "FACTOR"
+
+        # Resolver corredor
         if user.is_superuser or user.is_staff:
             corredor_id = request.data.get("corredor")
             if not corredor_id:
@@ -557,9 +566,11 @@ class ArchivoCargaViewSet(viewsets.ModelViewSet):
         else:
             corredor = perfil.corredor
 
+        # Guardar archivo físico
         filename = default_storage.save(f"cargas/{upload.name}", upload)
         ruta = default_storage.path(filename)
 
+        #  2) Crear job con tipo_carga correcto
         archivo_carga = ArchivoCarga.objects.create(
             corredor=corredor,
             nombre_original=upload.name,
@@ -568,12 +579,17 @@ class ArchivoCargaViewSet(viewsets.ModelViewSet):
             tamano_bytes=upload.size,
             estado_proceso="pendiente",
             submitted_by=user,
+            tipo_carga=tipo_carga,
         )
 
-        try:
-            procesar_archivo_carga(archivo_carga)
-        except Exception:
-            archivo_carga.refresh_from_db()
+        #  3) Procesar automáticamente SOLO si es FACTOR
+        if archivo_carga.tipo_carga == "FACTOR":
+            try:
+                procesar_archivo_carga(archivo_carga)
+            except Exception:
+                archivo_carga.refresh_from_db()
+        # Si es MONTO, por ahora se queda en "pendiente"
+        # hasta que implementes procesar_monto.
 
         archivo_carga.refresh_from_db()
         serializer = self.get_serializer(archivo_carga)
@@ -594,7 +610,7 @@ class ArchivoCargaViewSet(viewsets.ModelViewSet):
         )
 
     # ======================================================
-    # 5.2 Procesar job (general / FACTOR)
+    # 5.2 Procesar job (usa lógica actual de FACTOR)
     # ======================================================
     @action(detail=True, methods=["post"], url_path="procesar")
     def procesar(self, request, pk=None):
@@ -624,9 +640,6 @@ class ArchivoCargaViewSet(viewsets.ModelViewSet):
             )
         return self.procesar(request, pk)
 
-    # ======================================================
-    # 5.2 MONTO / CALCULAR FACTORES (stubs por ahora)
-    # ======================================================
     @action(detail=True, methods=["post"], url_path="procesar-monto")
     def procesar_monto(self, request, pk=None):
         job = self.get_object()
@@ -655,11 +668,3 @@ class ArchivoCargaViewSet(viewsets.ModelViewSet):
             status=status.HTTP_501_NOT_IMPLEMENTED,
         )
 
-
-
-class HistorialCalificacionViewSet(viewsets.ReadOnlyModelViewSet):
-    queryset = HistorialCalificacion.objects.select_related(
-        "calificacion", "usuario"
-    ).all()
-    serializer_class = HistorialCalificacionSerializer
-    permission_classes = [permissions.IsAuthenticated]
