@@ -14,34 +14,26 @@ from .email_utils import send_email_async
 from .models import ArchivoCarga, CalificacionTributaria, Pais
 
 
-class DetectorPaisTributario(object):
-    """
-    Detección simple de país a partir de los datos de una fila.
-    Usa patrones de identificadores (RUT/NIT/RUC) y palabras clave.
-    Devuelve un código ISO3 (CHL, COL, PER) y un score de confianza.
-    """
+# ============================================================
+# DETECTOR DE PAÍS
+# ============================================================
 
+class DetectorPaisTributario(object):
     PATRONES = {
         "CHL": {
-            "regex": [
-                r"\d{1,2}\.\d{3}\.\d{3}-[0-9kK]",
-            ],
+            "regex": [r"\d{1,2}\.\d{3}\.\d{3}-[0-9kK]"],
             "keywords": ["CHILE", "SANTIAGO", "RUT"],
             "score_regex": 0.7,
             "score_keyword": 0.3,
         },
         "COL": {
-            "regex": [
-                r"\d{5,10}",
-            ],
+            "regex": [r"\d{5,10}"],
             "keywords": ["COLOMBIA", "BOGOTA", "NIT"],
             "score_regex": 0.6,
             "score_keyword": 0.4,
         },
         "PER": {
-            "regex": [
-                r"\d{11}",
-            ],
+            "regex": [r"\d{11}"],
             "keywords": ["PERU", "LIMA", "RUC"],
             "score_regex": 0.6,
             "score_keyword": 0.4,
@@ -54,45 +46,29 @@ class DetectorPaisTributario(object):
         if not texto.strip():
             return None, 0.0
 
-        scores = {pais: 0.0 for pais in cls.PATRONES.keys()}
+        scores = {pais: 0.0 for pais in cls.PATRONES}
+
         for codigo, reglas in cls.PATRONES.items():
             for patron in reglas["regex"]:
                 if re.search(patron, texto):
                     scores[codigo] += reglas["score_regex"]
+
             for kw in reglas["keywords"]:
                 if kw in texto:
                     scores[codigo] += reglas["score_keyword"]
 
-        mejor = None
-        mejor_score = 0.0
-        for codigo, score in scores.items():
-            if score > mejor_score:
-                mejor = codigo
-                mejor_score = score
-
-        if mejor_score < 0.3:
-            return None, mejor_score
-
-        return mejor, mejor_score
+        mejor = max(scores, key=scores.get)
+        return (mejor, scores[mejor]) if scores[mejor] >= 0.3 else (None, scores[mejor])
 
 
-# -------------------------------
-# PARSEADORES Y HELPERS
-# -------------------------------
+# ============================================================
+# PARSEADOR UNIVERSAL DE PDF
+# ============================================================
 
 def _parse_pdf_text_to_rows(file_obj):
-    """
-    Parser PDF universal:
-    - extrae TODO el texto legible
-    - detecta filas aunque no tengan formato tabular
-    - soporta: | , múltiples espacios, columnas desalineadas, filas rotas
-    - nunca revienta, siempre devuelve al menos un DataFrame usable
-    """
-
     rows = []
 
     try:
-        import pdfplumber
         pdf = pdfplumber.open(file_obj)
     except Exception as e:
         raise ValidationError(f"No se pudo abrir PDF: {e}")
@@ -107,44 +83,37 @@ def _parse_pdf_text_to_rows(file_obj):
             if not clean:
                 continue
 
-            # 1) Separación por barras
             if "|" in clean:
-                parts = [p.strip() for p in clean.split("|") if p.strip()]
-                if parts:
-                    rows.append(parts)
+                rows.append([p.strip() for p in clean.split("|") if p.strip()])
                 continue
 
-            # 2) Separación por 2+ espacios
             parts = re.split(r"\s{2,}", clean)
             parts = [p.strip() for p in parts if p.strip()]
             if len(parts) > 1:
                 rows.append(parts)
                 continue
 
-            # 3) Si llega aquí, consideramos la línea como una sola columna
             rows.append([clean])
 
     pdf.close()
 
-    # Si no hay filas, devolvemos al menos una fila vacía
     if not rows:
         return [[""]]
 
-    # Normalización para evitar filas muy cortas
     max_cols = max(len(r) for r in rows)
-    normalized = []
-    for r in rows:
-        fill = r + [""] * (max_cols - len(r))
-        normalized.append(fill)
+    normalized = [r + [""] * (max_cols - len(r)) for r in rows]
 
     return normalized
 
 
+# ============================================================
+# HELPERS
+# ============================================================
 
-
-def _normalizar_header(nombre_columna: str) -> str:
+def _normalizar_header(nombre_columna):
     if not nombre_columna:
         return ""
+
     nombre = nombre_columna.strip().lower()
 
     reemplazos = {
@@ -169,8 +138,6 @@ def _normalizar_header(nombre_columna: str) -> str:
 
         "valor_hist": "valor_historico",
         "valor_h": "valor_historico",
-
-        "valor_actualizado": "valor_actualizado",
     }
 
     if nombre in reemplazos:
@@ -178,31 +145,21 @@ def _normalizar_header(nombre_columna: str) -> str:
 
     for i in range(8, 20):
         base = f"factor_{i}"
-        patrones = [
-            base,
-            base.replace("_", ""),
-            f"f{i}",
-            f"factor{i}",
-            f"fac_{i}",
-        ]
-        if nombre in patrones:
+        if nombre in [base, base.replace("_", ""), f"f{i}", f"factor{i}", f"fac_{i}"]:
             return base
 
     return nombre
 
 
-def _detectar_tipo_archivo_por_extension(nombre_archivo: str):
-    _, ext = os.path.splitext(nombre_archivo.lower())
-    if ext == ".csv":
-        return "CSV"
-    if ext in (".xls", ".xlsx"):
-        return "EXCEL"
-    if ext == ".pdf":
-        return "PDF"
+def _detectar_tipo_archivo_por_extension(nombre_archivo):
+    ext = os.path.splitext(nombre_archivo.lower())[1]
+    if ext == ".csv": return "CSV"
+    if ext in [".xls", ".xlsx"]: return "EXCEL"
+    if ext == ".pdf": return "PDF"
     raise ValidationError(f"Extensión no soportada: {ext}")
 
 
-def _cargar_dataframe_desde_archivo(file_obj, nombre_archivo: str, delimiter: str = ","):
+def _cargar_dataframe_desde_archivo(file_obj, nombre_archivo, delimiter=","):
     tipo = _detectar_tipo_archivo_por_extension(nombre_archivo)
 
     if tipo == "CSV":
@@ -213,17 +170,13 @@ def _cargar_dataframe_desde_archivo(file_obj, nombre_archivo: str, delimiter: st
 
     if tipo == "PDF":
         rows = _parse_pdf_text_to_rows(file_obj)
-
-        # Convertimos a DataFrame aunque no existan encabezados
         df = pd.DataFrame(rows)
 
-        # Si la primera fila parece encabezado, la usamos
-        header_candidate = df.iloc[0].tolist()
-        if any(str(h).lower() in ["cliente", "instrumento", "mercado", "ejercicio"] for h in header_candidate):
-            df.columns = header_candidate
+        header = df.iloc[0].tolist()
+        if any(str(h).lower() in ["cliente", "instrumento", "mercado", "ejercicio"] for h in header):
+            df.columns = header
             df = df[1:]
         else:
-            # Si no hay encabezado, generamos encabezados genéricos
             df.columns = [f"col_{i}" for i in range(len(df.columns))]
 
         return df
@@ -231,12 +184,11 @@ def _cargar_dataframe_desde_archivo(file_obj, nombre_archivo: str, delimiter: st
     raise ValidationError("Tipo no soportado.")
 
 
+def _extraer_valor(df_row, col, default=None):
+    return df_row[col] if col in df_row.index else default
 
-def _extraer_valor(df_row, col_name, default=None):
-    return df_row[col_name] if col_name in df_row.index else default
 
-
-def _normalizar_headers_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+def _normalizar_headers_dataframe(df):
     df = df.copy()
     df.rename(columns={c: _normalizar_header(c) for c in df.columns}, inplace=True)
     return df
@@ -245,27 +197,24 @@ def _normalizar_headers_dataframe(df: pd.DataFrame) -> pd.DataFrame:
 def _normalizar_valor_decimal(valor):
     if valor is None:
         return None
-    if isinstance(valor, float):
-        return None if isnan(valor) else Decimal(str(valor))
-    if isinstance(valor, int):
-        return Decimal(valor)
 
     s = str(valor).strip()
-    if not s:
+    s = re.sub(r"[^\d\.,\-]", "", s)
+    match = re.search(r"[-+]?\d*[\.,]?\d+", s)
+    if not match:
         return None
 
-    s = s.replace(" ", "").replace(".", "").replace(",", ".")
+    s = match.group(0).replace(",", ".")
+
     try:
-        return Decimal(s)
+        d = Decimal(s)
     except:
         return None
 
+    return d.quantize(Decimal("0.0001"))
 
-# -------------------------------
-# AUTO OBTENER PAÍS
-# -------------------------------
 
-def _detectar_pais_y_crear_si_falta(code: str):
+def _detectar_pais_y_crear_si_falta(code):
     if not code:
         return None
     code = code.upper()
@@ -273,9 +222,9 @@ def _detectar_pais_y_crear_si_falta(code: str):
     return pais
 
 
-# -------------------------------
-# CREAR / ACTUALIZAR CALIFICACIÓN
-# -------------------------------
+# ============================================================
+# CREAR O ACTUALIZAR CALIFICACIÓN
+# ============================================================
 
 def _obtener_o_crear_calificacion_from_row(row_dict, corredor, archivo_carga):
     ident = row_dict.get("identificador_cliente")
@@ -284,7 +233,7 @@ def _obtener_o_crear_calificacion_from_row(row_dict, corredor, archivo_carga):
     if not ident or not inst:
         raise ValidationError("identificador_cliente e instrumento son obligatorios.")
 
-    ejercicio = row_dict.get("ejercicio") or str(timezone.now().year)
+    ejercicio = row_dict.get("ejercicio") or timezone.now().year
     mercado = row_dict.get("mercado")
     secuencia = row_dict.get("secuencia_evento")
 
@@ -292,10 +241,8 @@ def _obtener_o_crear_calificacion_from_row(row_dict, corredor, archivo_carga):
         "corredor": corredor,
         "archivo_origen": archivo_carga,
         "pais": row_dict.get("pais"),
-
         "mercado": mercado,
         "ejercicio": ejercicio,
-
         "valor_historico": row_dict.get("valor_historico") or Decimal("0"),
         "valor_actualizado": row_dict.get("valor_actualizado") or Decimal("0"),
         "factor_actualizacion": row_dict.get("factor_actualizacion") or Decimal("0"),
@@ -304,7 +251,6 @@ def _obtener_o_crear_calificacion_from_row(row_dict, corredor, archivo_carga):
     for i in range(8, 20):
         defaults[f"factor_{i}"] = row_dict.get(f"factor_{i}") or Decimal("0")
 
-    # OJO: ya no usamos secuencia_evento como clave de búsqueda
     obj, created = CalificacionTributaria.objects.update_or_create(
         corredor=corredor,
         identificador_cliente=ident,
@@ -314,58 +260,51 @@ def _obtener_o_crear_calificacion_from_row(row_dict, corredor, archivo_carga):
         defaults=defaults,
     )
 
-    # Si el archivo trae una secuencia válida, la usamos
     if secuencia and secuencia.isdigit():
         obj.secuencia_evento = secuencia
     else:
-        # Si no, dejamos que el modelo la genere (10000, 10001, ...)
         obj.secuencia_evento = None
 
-    # Importante: esto dispara el save() del modelo y genera la secuencia
     obj.save()
-
     return obj, created
 
 
+# ============================================================
+# DETECTAR MONTO O FACTOR
+# ============================================================
 
-# -------------------------------
-# AUTO MODO FACTOR O MONTO
-# -------------------------------
-
-def _es_modo_monto(factores_dict):
+def _es_modo_monto(factores):
     total = Decimal("0")
-    for v in factores_dict.values():
+    for v in factores.values():
         if v:
             total += v
             if v > Decimal("1"):
                 return True
-    if total > Decimal("1.0001"):
-        return True
-    return False
+    return total > Decimal("1.0001")
 
 
 def _normalizar_factores_a_1(factores):
-    total = sum([v for v in factores.values() if v], Decimal("0"))
+    total = sum((v or Decimal("0")) for v in factores.values())
     if total == 0:
         return {k: Decimal("0") for k in factores}
     return {k: (v or Decimal("0")) / total for k, v in factores.items()}
 
 
-# -------------------------------
-# PROCESADORES FACTOR Y MONTO
-# -------------------------------
+# ============================================================
+# PROCESAR FACTOR
+# ============================================================
 
 def procesar_archivo_carga_factores(archivo_carga, file_obj, corredor, delimiter=","):
-    started = timezone.now()
-    archivo_carga.started_at = started
+
+    archivo_carga.started_at = timezone.now()
     archivo_carga.estado_proceso = "procesando"
-    archivo_carga.save(update_fields=["started_at", "estado_proceso"])
+    archivo_carga.save()
 
     try:
         df = _cargar_dataframe_desde_archivo(file_obj, archivo_carga.nombre_original, delimiter)
         df = _normalizar_headers_dataframe(df)
     except ValidationError as e:
-        _finalizar_error(archivo_carga, started, str(e))
+        _finalizar_error(archivo_carga, archivo_carga.started_at, str(e))
         return
 
     total = nuevos = actualizados = rechazados = 0
@@ -374,19 +313,19 @@ def procesar_archivo_carga_factores(archivo_carga, file_obj, corredor, delimiter
     for idx, row in df.iterrows():
         total += 1
         try:
-            row_dict = {}
+            row_dict = {
+                "identificador_cliente": str(_extraer_valor(row, "identificador_cliente", "")).strip(),
+                "instrumento": str(_extraer_valor(row, "instrumento", "")).strip(),
+                "mercado": str(_extraer_valor(row, "mercado", "")).strip(),
+                "ejercicio": str(_extraer_valor(row, "ejercicio", "")).strip(),
+                "secuencia_evento": str(_extraer_valor(row, "secuencia_evento", "")).strip(),
+            }
 
-            row_dict["identificador_cliente"] = str(_extraer_valor(row, "identificador_cliente", "")).strip()
-            row_dict["instrumento"] = str(_extraer_valor(row, "instrumento", "")).strip()
-            row_dict["mercado"] = str(_extraer_valor(row, "mercado", "")).strip()
-            row_dict["ejercicio"] = str(_extraer_valor(row, "ejercicio", "")).strip()
-            row_dict["secuencia_evento"] = str(_extraer_valor(row, "secuencia_evento", "")).strip()
-
-            # país en columna
+            # PAÍS
             for k, v in row.items():
                 if "pais" in str(k).lower():
                     code = str(v).strip().upper()
-                    row_dict["pais"] = _detectar_pais_y_crear_si_falta(code) if code in ["CHL","COL","PER"] else None
+                    row_dict["pais"] = _detectar_pais_y_crear_si_falta(code)
                     break
             if "pais" not in row_dict:
                 code, _ = DetectorPaisTributario.detectar_pais({
@@ -395,12 +334,13 @@ def procesar_archivo_carga_factores(archivo_carga, file_obj, corredor, delimiter
                 })
                 row_dict["pais"] = _detectar_pais_y_crear_si_falta(code) if code else None
 
-            # factores
+            # FACTORES (con fix val or 0)
             factores = {}
             for i in range(8, 20):
                 col = f"factor_{i}"
-                raw = _extraer_valor(row, col, None)
+                raw = _extraer_valor(row, col)
                 val = _normalizar_valor_decimal(raw)
+                val = val or Decimal("0")      # FIX FINAL
                 row_dict[col] = val
                 factores[col] = val
 
@@ -409,37 +349,34 @@ def procesar_archivo_carga_factores(archivo_carga, file_obj, corredor, delimiter
                 row_dict.update(norm)
                 row_dict["factor_actualizacion"] = Decimal("1")
             else:
-                suma = sum([v for v in factores.values() if v], Decimal("0"))
-                row_dict["factor_actualizacion"] = suma
+                row_dict["factor_actualizacion"] = sum(factores.values())
 
             obj, created = _obtener_o_crear_calificacion_from_row(row_dict, corredor, archivo_carga)
-            if created:
-                nuevos += 1
-            else:
-                actualizados += 1
+            nuevos += created
+            actualizados += (1 - created)
 
         except Exception as e:
             rechazados += 1
-            errores.append({
-                "fila": idx + 1,
-                "error": str(e),
-                "datos": row.to_dict(),
-            })
+            errores.append({"fila": idx + 1, "error": str(e), "datos": row.to_dict()})
 
-    _finalizar_ok(archivo_carga, started, total, nuevos, actualizados, rechazados, errores)
+    _finalizar_ok(archivo_carga, archivo_carga.started_at, total, nuevos, actualizados, rechazados, errores)
 
+
+# ============================================================
+# PROCESAR MONTO
+# ============================================================
 
 def procesar_archivo_carga_monto(archivo_carga, file_obj, corredor, delimiter=","):
-    started = timezone.now()
-    archivo_carga.started_at = started
+
+    archivo_carga.started_at = timezone.now()
     archivo_carga.estado_proceso = "procesando"
-    archivo_carga.save(update_fields=["started_at", "estado_proceso"])
+    archivo_carga.save()
 
     try:
         df = _cargar_dataframe_desde_archivo(file_obj, archivo_carga.nombre_original, delimiter)
         df = _normalizar_headers_dataframe(df)
     except ValidationError as e:
-        _finalizar_error(archivo_carga, started, str(e))
+        _finalizar_error(archivo_carga, archivo_carga.started_at, str(e))
         return
 
     total = nuevos = actualizados = rechazados = 0
@@ -448,19 +385,20 @@ def procesar_archivo_carga_monto(archivo_carga, file_obj, corredor, delimiter=",
     for idx, row in df.iterrows():
         total += 1
         try:
-            row_dict = {}
 
-            row_dict["identificador_cliente"] = str(_extraer_valor(row, "identificador_cliente", "")).strip()
-            row_dict["instrumento"] = str(_extraer_valor(row, "instrumento", "")).strip()
-            row_dict["mercado"] = str(_extraer_valor(row, "mercado", "")).strip()
-            row_dict["ejercicio"] = str(_extraer_valor(row, "ejercicio", "")).strip()
-            row_dict["secuencia_evento"] = str(_extraer_valor(row, "secuencia_evento", "")).strip()
+            row_dict = {
+                "identificador_cliente": str(_extraer_valor(row, "identificador_cliente", "")).strip(),
+                "instrumento": str(_extraer_valor(row, "instrumento", "")).strip(),
+                "mercado": str(_extraer_valor(row, "mercado", "")).strip(),
+                "ejercicio": str(_extraer_valor(row, "ejercicio", "")).strip(),
+                "secuencia_evento": str(_extraer_valor(row, "secuencia_evento", "")).strip(),
+            }
 
-            # país
+            # PAÍS
             for k, v in row.items():
                 if "pais" in str(k).lower():
                     code = str(v).strip().upper()
-                    row_dict["pais"] = _detectar_pais_y_crear_si_falta(code) if code in ["CHL","COL","PER"] else None
+                    row_dict["pais"] = _detectar_pais_y_crear_si_falta(code)
                     break
             if "pais" not in row_dict:
                 code, _ = DetectorPaisTributario.detectar_pais({
@@ -469,12 +407,13 @@ def procesar_archivo_carga_monto(archivo_carga, file_obj, corredor, delimiter=",
                 })
                 row_dict["pais"] = _detectar_pais_y_crear_si_falta(code) if code else None
 
-            # factores raw
+            # FACTORES
             factores = {}
             for i in range(8, 20):
                 col = f"factor_{i}"
-                raw = _extraer_valor(row, col, None)
+                raw = _extraer_valor(row, col)
                 val = _normalizar_valor_decimal(raw)
+                val = val or Decimal("0")      # FIX FINAL
                 row_dict[col] = val
                 factores[col] = val
 
@@ -486,26 +425,19 @@ def procesar_archivo_carga_monto(archivo_carga, file_obj, corredor, delimiter=",
             row_dict["factor_actualizacion"] = Decimal("1")
 
             obj, created = _obtener_o_crear_calificacion_from_row(row_dict, corredor, archivo_carga)
-
-            if created:
-                nuevos += 1
-            else:
-                actualizados += 1
+            nuevos += created
+            actualizados += (1 - created)
 
         except Exception as e:
             rechazados += 1
-            errores.append({
-                "fila": idx + 1,
-                "error": str(e),
-                "datos": row.to_dict(),
-            })
+            errores.append({"fila": idx + 1, "error": str(e), "datos": row.to_dict()})
 
-    _finalizar_ok(archivo_carga, started, total, nuevos, actualizados, rechazados, errores)
+    _finalizar_ok(archivo_carga, archivo_carga.started_at, total, nuevos, actualizados, rechazados, errores)
 
 
-# -------------------------------
+# ============================================================
 # FINALIZADORES
-# -------------------------------
+# ============================================================
 
 def _finalizar_ok(archivo_carga, started, total, nuevos, actualizados, rechazados, errores):
     finished = timezone.now()
@@ -519,15 +451,12 @@ def _finalizar_ok(archivo_carga, started, total, nuevos, actualizados, rechazado
         "rechazados": rechazados,
     }
     archivo_carga.errores_por_fila = errores
-    archivo_carga.save(update_fields=[
-        "finished_at", "tiempo_procesamiento_seg",
-        "estado_proceso", "resumen_proceso", "errores_por_fila"
-    ])
+    archivo_carga.save()
 
     notificar_resultado_archivo(archivo_carga)
 
 
-def _finalizar_error(archivo_carga, started, detalle_error):
+def _finalizar_error(archivo_carga, started, detalle):
     finished = timezone.now()
     archivo_carga.finished_at = finished
     archivo_carga.tiempo_procesamiento_seg = (finished - started).total_seconds()
@@ -537,43 +466,28 @@ def _finalizar_error(archivo_carga, started, detalle_error):
         "nuevos": 0,
         "actualizados": 0,
         "rechazados": 0,
-        "detalle": detalle_error,
+        "detalle": detalle,
     }
     archivo_carga.errores_por_fila = []
-    archivo_carga.save(update_fields=[
-        "finished_at", "tiempo_procesamiento_seg",
-        "estado_proceso", "resumen_proceso", "errores_por_fila"
-    ])
+    archivo_carga.save()
 
     notificar_resultado_archivo(archivo_carga)
 
 
-# -------------------------------
-# ROUTER PRINCIPAL — AHORA AUTO FILE_OBJ
-# -------------------------------
+# ============================================================
+# ROUTER PRINCIPAL
+# ============================================================
 
 def procesar_archivo_carga(archivo_carga, file_obj=None, corredor=None, delimiter=","):
-    """
-    Esta función ahora soporta LLAMADA SIMPLE:
 
-        procesar_archivo_carga(archivo_carga)
-
-    SIN file_obj y SIN corredor.
-    Lo obtiene automáticamente del archivo físico y del modelo.
-    """
-
-    # Obtener file_obj si no fue entregado
     if file_obj is None:
         try:
             f = open(archivo_carga.ruta_almacenamiento, "rb")
             file_obj = File(f)
-        except Exception as e:
-            raise ValidationError(f"No se pudo abrir archivo físico: {e}")
+        except:
+            raise ValidationError("No se pudo abrir archivo físico.")
 
-    # Obtener corredor automáticamente
-    if corredor is None:
-        corredor = archivo_carga.corredor
-
+    corredor = corredor or archivo_carga.corredor
     tipo = (archivo_carga.tipo_carga or "FACTOR").upper()
 
     if tipo == "FACTOR":
@@ -585,11 +499,11 @@ def procesar_archivo_carga(archivo_carga, file_obj=None, corredor=None, delimite
     raise ValidationError(f"Tipo de carga no soportado: {tipo}")
 
 
-# -------------------------------
+# ============================================================
 # EMAIL
-# -------------------------------
+# ============================================================
 
-def notificar_resultado_archivo(archivo_carga: ArchivoCarga):
+def notificar_resultado_archivo(archivo_carga):
     corredor = archivo_carga.corredor
     if not corredor or not corredor.email_contacto:
         return
@@ -605,10 +519,10 @@ def notificar_resultado_archivo(archivo_carga: ArchivoCarga):
     body.append(f"\nEstado: {archivo_carga.estado_proceso}")
 
     body.append("\n\nResumen:")
-    body.append(f"  Total: {resumen.get('total_registros',0)}")
-    body.append(f"  Nuevos: {resumen.get('nuevos',0)}")
-    body.append(f"  Actualizados: {resumen.get('actualizados',0)}")
-    body.append(f"  Rechazados: {resumen.get('rechazados',0)}")
+    body.append(f"  Total: {resumen.get('total_registros', 0)}")
+    body.append(f"  Nuevos: {resumen.get('nuevos', 0)}")
+    body.append(f"  Actualizados: {resumen.get('actualizados', 0)}")
+    body.append(f"  Rechazados: {resumen.get('rechazados', 0)}")
 
     if errores:
         body.append("\nErrores (primeros 10):")
@@ -622,49 +536,46 @@ def notificar_resultado_archivo(archivo_carga: ArchivoCarga):
     )
 
 
-# -------------------------------
-# CONVERSIÓN DE ARCHIVOS
-# -------------------------------
+# ============================================================
+# CONVERSIÓN Y PREVIEW
+# ============================================================
 
-def _sanitizar_delimitador(delimiter: str) -> str:
+def _sanitizar_delimitador(delimiter):
     d = (delimiter or ",").strip()
     return d if len(d) == 1 else ","
 
 
 def _leer_archivo_a_dataframe_generico(file_obj, filename, delimiter=","):
-    delimiter = _sanitizar_delimitador(delimiter)
     ext = os.path.splitext(filename)[1].lower()
+    delimiter = _sanitizar_delimitador(delimiter)
 
     if ext == ".csv":
         return pd.read_csv(file_obj, delimiter=delimiter)
 
-    if ext in (".xls", ".xlsx"):
+    if ext in [".xls", ".xlsx"]:
         return pd.read_excel(file_obj)
 
     if ext == ".pdf":
-        rows = _parse_pdf_text_to_rows(file_obj)
-        return pd.DataFrame(rows)
+        return pd.DataFrame(_parse_pdf_text_to_rows(file_obj))
 
     raise ValidationError(f"No se soporta extensión: {ext}")
 
 
-
-def convertir_archivo_generico(file_obj, filename: str, formato_destino: str, delimiter=","):
+def convertir_archivo_generico(file_obj, filename, formato_destino, delimiter=","):
     import io
     delimiter = _sanitizar_delimitador(delimiter)
     formato = (formato_destino or "").upper().strip()
+
     if formato not in {"EXCEL_TO_CSV", "CSV_TO_EXCEL", "PDF_TO_EXCEL"}:
         raise ValidationError("Formato conversión inválido.")
 
     df = _leer_archivo_a_dataframe_generico(file_obj, filename, delimiter)
-
     buffer = io.BytesIO()
 
     if formato == "EXCEL_TO_CSV":
         df.to_csv(buffer, index=False, sep=delimiter)
         mimetype = "text/csv"
         out_name = filename.replace(".xlsx", "_conv.csv")
-
     else:
         with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
             df.to_excel(writer, index=False)
@@ -675,7 +586,7 @@ def convertir_archivo_generico(file_obj, filename: str, formato_destino: str, de
     return buffer, out_name, mimetype
 
 
-def generar_vista_previa_archivo(file_obj, filename: str, delimiter=",", max_filas=50):
+def generar_vista_previa_archivo(file_obj, filename, delimiter=",", max_filas=50):
     df = _leer_archivo_a_dataframe_generico(file_obj, filename, delimiter)
     df_preview = df.head(max_filas).fillna("")
     return {
