@@ -235,7 +235,6 @@ def _obtener_o_crear_calificacion_from_row(row_dict, corredor, archivo_carga):
 
         "mercado": mercado,
         "ejercicio": ejercicio,
-        "secuencia_evento": secuencia,
 
         "valor_historico": row_dict.get("valor_historico") or Decimal("0"),
         "valor_actualizado": row_dict.get("valor_actualizado") or Decimal("0"),
@@ -245,16 +244,28 @@ def _obtener_o_crear_calificacion_from_row(row_dict, corredor, archivo_carga):
     for i in range(8, 20):
         defaults[f"factor_{i}"] = row_dict.get(f"factor_{i}") or Decimal("0")
 
+    # OJO: ya no usamos secuencia_evento como clave de búsqueda
     obj, created = CalificacionTributaria.objects.update_or_create(
         corredor=corredor,
         identificador_cliente=ident,
         instrumento=inst,
         ejercicio=ejercicio,
         mercado=mercado,
-        secuencia_evento=secuencia,
         defaults=defaults,
     )
+
+    # Si el archivo trae una secuencia válida, la usamos
+    if secuencia and secuencia.isdigit():
+        obj.secuencia_evento = secuencia
+    else:
+        # Si no, dejamos que el modelo la genere (10000, 10001, ...)
+        obj.secuencia_evento = None
+
+    # Importante: esto dispara el save() del modelo y genera la secuencia
+    obj.save()
+
     return obj, created
+
 
 
 # -------------------------------
