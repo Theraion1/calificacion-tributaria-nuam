@@ -20,24 +20,31 @@ from .models import ArchivoCarga, CalificacionTributaria, Pais
 class DetectorPaisTributario(object):
     PATRONES = {
         "CHL": {
-            "regex": [r"\d{1,2}\.\d{3}\.\d{3}-[0-9kK]"],
-            "keywords": ["CHILE", "SANTIAGO", "RUT"],
+            "regex": [
+                r"\d{1,2}\.\d{3}\.\d{3}-[0-9kK]",
+            ],
+            "keywords": ["CHL", "CHILE", "SANTIAGO", "RUT"],
             "score_regex": 0.7,
             "score_keyword": 0.3,
         },
         "COL": {
-            "regex": [r"\d{5,10}"],
-            "keywords": ["COLOMBIA", "BOGOTA", "NIT"],
+            "regex": [
+                r"\d{5,10}",
+            ],
+            "keywords": ["COL", "COLOMBIA", "BOGOTA", "NIT"],
             "score_regex": 0.6,
             "score_keyword": 0.4,
         },
         "PER": {
-            "regex": [r"\d{11}"],
-            "keywords": ["PERU", "LIMA", "RUC"],
+            "regex": [
+                r"\d{11}",
+            ],
+            "keywords": ["PER", "PERU", "LIMA", "RUC"],
             "score_regex": 0.6,
             "score_keyword": 0.4,
         },
     }
+
 
     @classmethod
     def detectar_pais(cls, fila_dict):
