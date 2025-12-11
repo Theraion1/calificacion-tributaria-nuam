@@ -515,7 +515,7 @@ def procesar_archivo_carga_factores(
     notificar_resultado_archivo(archivo_carga)
 
 
-def procesar_archivo_carga_montos(
+def procesar_archivo_carga_monto(
     archivo_carga: ArchivoCarga, file_obj, corredor, delimiter: str = ","
 ):
     """
@@ -667,7 +667,7 @@ def procesar_archivo_carga(archivo_carga: ArchivoCarga, file_obj, corredor, deli
             archivo_carga, file_obj, corredor, delimiter=delimiter
         )
     elif tipo == "MONTO":
-        return procesar_archivo_carga_montos(
+        return procesar_archivo_carga_monto(
             archivo_carga, file_obj, corredor, delimiter=delimiter
         )
     else:
