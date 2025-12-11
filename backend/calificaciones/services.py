@@ -82,27 +82,34 @@ def _parse_pdf_text_to_rows(file_obj):
             if not clean:
                 continue
 
+            # Si tiene separadores visibles
             if "|" in clean:
                 rows.append([p.strip() for p in clean.split("|") if p.strip()])
                 continue
 
+            # =============================================
+            # NUEVO: DIVISIÓN INTELIGENTE
+            # Usa double-space como corte de columna.
+            # Mantiene las descripciones completas.
+            # =============================================
             parts = re.split(r"\s{2,}", clean)
             parts = [p.strip() for p in parts if p.strip()]
-            if len(parts) > 1:
-                rows.append(parts)
-                continue
 
-            rows.append([clean])
+            # Si NO funcionó porque todo viene con 1 espacio → fallback seguro
+            if len(parts) <= 1:
+                parts = clean.split()
+
+            rows.append(parts)
 
     pdf.close()
 
-    if not rows:
-        return [[""]]
-
+    # Normalizar número de columnas
     max_cols = max(len(r) for r in rows)
     normalized = [r + [""] * (max_cols - len(r)) for r in rows]
 
     return normalized
+
+
 
 
 # ============================================================
@@ -174,67 +181,61 @@ def _cargar_dataframe_desde_archivo(file_obj, nombre_archivo, delimiter=","):
         return pd.read_excel(file_obj)
 
     # ============================================================
-    # PDF
+    # PDF  — PARSEO ROBUSTO FINAL
     # ============================================================
     if tipo == "PDF":
         rows = _parse_pdf_text_to_rows(file_obj)
         df = pd.DataFrame(rows)
 
-        # ============================================================
-        # BLOQUE PDF ESPECIAL — DETECCIÓN DE CABECERA ROBUSTA
-        # ============================================================
-        if df.shape[1] == 1:
-            raw_header = str(df.iloc[0, 0]).strip().lower()
+        # Si el PDF está completamente vacío
+        if df.empty:
+            raise ValidationError("El PDF no contiene datos legibles.")
 
-            # Palabras clave típicas para cabecera
-            claves = ["identificador", "instrumento", "mercado", "pais", "factor_8"]
+        # ===============================================
+        # 1) Detectar si la primera fila es cabecera real
+        # ===============================================
+        first_row = df.iloc[0].tolist()
+        first_row_text = " ".join([str(v) for v in first_row]).lower()
 
-            # Contamos cuántas palabras clave aparecen en la cabecera detectada
-            coincidencias = sum(1 for c in claves if c in raw_header)
+        # Palabras clave que normalmente aparecen en cabeceras
+        claves = [
+            "identificador", "cliente",
+            "instrumento",
+            "mercado",
+            "descripcion", "descripción",
+            "pais", "país",
+            "factor"
+        ]
 
-            # Detectamos cabecera si coinciden al menos 2 claves
-            if coincidencias >= 2:
-                splitter = r"\s{2,}"  # separar por 2+ espacios
+        coincidencias = sum(1 for c in claves if c in first_row_text)
 
-                # Procesar cabecera
-                header_tokens = re.split(splitter, str(df.iloc[0, 0]).strip())
-                header_tokens = [h.strip() for h in header_tokens if h.strip()]
+        # Si detectamos cabecera real (≥2 coincidencias)
+        if coincidencias >= 2:
+            # Usamos esa fila como cabecera
+            header_tokens = [str(h).strip() for h in first_row]
 
-                # Procesar filas de datos
-                data_rows = []
-                for val in df.iloc[1:, 0]:
-                    tokens = re.split(splitter, str(val).strip())
-                    tokens = [t.strip() for t in tokens if t.strip()]
+            # Normalizamos duplicados o vacíos
+            header_tokens = [
+                h if h else f"col_{i}" for i, h in enumerate(header_tokens)
+            ]
 
-                    # Igualar longitud de fila a la cabecera
-                    if len(tokens) < len(header_tokens):
-                        tokens += [""] * (len(header_tokens) - len(tokens))
-                    if len(tokens) > len(header_tokens):
-                        tokens = tokens[:len(header_tokens)]
+            df.columns = header_tokens
+            df = df[1:]  # remover cabecera real
+            df = df.reset_index(drop=True)
+            return df
 
-                    data_rows.append(tokens)
-
-                df = pd.DataFrame(data_rows, columns=header_tokens)
-                return df
-
-        # ============================================================
-        # PARSEO PDF NORMAL (cuando no aplica caso especial)
-        # ============================================================
-        header = df.iloc[0].tolist()
-
-        if any(str(h).lower() in ["cliente", "instrumento", "mercado", "ejercicio"] for h in header):
-            df.columns = header
-            df = df[1:]
-        else:
-            # Sin cabecera válida => asignar columnas genéricas
-            df.columns = [f"col_{i}" for i in range(len(df.columns))]
-
+        # ===============================================
+        # 2) Si NO detectamos cabecera real:
+        #    Asignar nombres genéricos col_0, col_1, ...
+        # ===============================================
+        df.columns = [f"col_{i}" for i in range(df.shape[1])]
         return df
 
     # ============================================================
-    # Si no se reconoce el tipo
+    # Tipo no soportado
     # ============================================================
     raise ValidationError("Tipo no soportado.")
+
 
 
 
