@@ -19,6 +19,7 @@ from calificaciones.views import (
     RegistroCorredorView,
     WhoAmIView,
     CambiarRolView,
+    ConversionArchivoView,
 )
 
 router = DefaultRouter()
@@ -39,21 +40,18 @@ router.register(
 urlpatterns = [
     path("admin/", admin.site.urls),
 
-    # ======================
-    # Autenticación JWT
-    # ======================
+    # Auth JWT
     path("api/auth/login/", LoginAPI.as_view(), name="jwt_login"),
     path("api/auth/refresh/", TokenRefreshView.as_view(), name="token_refresh"),
 
-    # ======================
     # Endpoints auxiliares
-    # ======================
     path("api/registro-corredor/", RegistroCorredorView.as_view(), name="registro-corredor"),
     path("api/whoami/", WhoAmIView.as_view(), name="whoami"),
     path("api/usuarios/<int:usuario_id>/cambiar-rol/", CambiarRolView.as_view(), name="cambiar-rol"),
 
-    # ======================
+    # Conversión de archivos (PDF, CSV, XLSX)
+    path("api/conversion/archivo/", ConversionArchivoView.as_view(), name="conversion-archivo"),
+
     # API principal
-    # ======================
     path("api/", include(router.urls)),
 ]
