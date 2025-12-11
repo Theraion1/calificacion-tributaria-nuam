@@ -85,13 +85,41 @@ def _parse_pdf_text_to_rows(file_obj):
     try:
         with pdfplumber.open(file_obj) as pdf:
             for page in pdf.pages:
+                # 1. Intentar extraer como tabla estructurada
+                table = page.extract_table()
+                if table:
+                    rows.extend(table)
+                    continue
+
+                # 2. Si no se detecta tabla, extraer texto plano
                 text = page.extract_text() or ""
                 for line in text.split("\n"):
-                    if "|" in line:
-                        rows.append([c.strip() for c in line.split("|")])
+                    clean = line.strip()
+                    if not clean:
+                        continue
+
+                    # Si trae pipes, es fácil
+                    if "|" in clean:
+                        rows.append([c.strip() for c in clean.split("|")])
+                        continue
+
+                    # 3. Detectar columnas separadas por varios espacios (PDF tabulares)
+                    parts = [p for p in re.split(r"\s{2,}", clean) if p]
+                    if len(parts) > 1:
+                        rows.append(parts)
+                        continue
+
+                    # 4. Si no se pudo dividir, lo tratamos como una sola columna
+                    rows.append([clean])
+
+        if not rows:
+            raise ValidationError("No se pudieron extraer filas desde el PDF.")
+
+        return rows
+
     except Exception as e:
         raise ValidationError(f"Error al leer PDF: {e}")
-    return rows
+
 
 
 def _normalizar_header(nombre_columna: str) -> str:
