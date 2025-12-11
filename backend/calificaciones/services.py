@@ -161,35 +161,52 @@ def _detectar_tipo_archivo_por_extension(nombre_archivo):
 def _cargar_dataframe_desde_archivo(file_obj, nombre_archivo, delimiter=","):
     tipo = _detectar_tipo_archivo_por_extension(nombre_archivo)
 
+    # ============================================================
+    # CSV
+    # ============================================================
     if tipo == "CSV":
         return pd.read_csv(file_obj, delimiter=delimiter)
 
+    # ============================================================
+    # EXCEL
+    # ============================================================
     if tipo == "EXCEL":
         return pd.read_excel(file_obj)
 
+    # ============================================================
+    # PDF
+    # ============================================================
     if tipo == "PDF":
         rows = _parse_pdf_text_to_rows(file_obj)
         df = pd.DataFrame(rows)
 
         # ============================================================
-        # BLOQUE PDF ESPECIAL ROBUSTO
+        # BLOQUE PDF ESPECIAL — DETECCIÓN DE CABECERA ROBUSTA
         # ============================================================
         if df.shape[1] == 1:
             raw_header = str(df.iloc[0, 0]).strip().lower()
 
-            # Detectar cabecera verdadera
-            if "identificador_cliente" in raw_header and "instrumento" in raw_header:
-                splitter = r"\s{2,}"
+            # Palabras clave típicas para cabecera
+            claves = ["identificador", "instrumento", "mercado", "pais", "factor_8"]
 
+            # Contamos cuántas palabras clave aparecen en la cabecera detectada
+            coincidencias = sum(1 for c in claves if c in raw_header)
+
+            # Detectamos cabecera si coinciden al menos 2 claves
+            if coincidencias >= 2:
+                splitter = r"\s{2,}"  # separar por 2+ espacios
+
+                # Procesar cabecera
                 header_tokens = re.split(splitter, str(df.iloc[0, 0]).strip())
                 header_tokens = [h.strip() for h in header_tokens if h.strip()]
 
+                # Procesar filas de datos
                 data_rows = []
                 for val in df.iloc[1:, 0]:
                     tokens = re.split(splitter, str(val).strip())
                     tokens = [t.strip() for t in tokens if t.strip()]
 
-                    # Ajustar longitud exacta
+                    # Igualar longitud de fila a la cabecera
                     if len(tokens) < len(header_tokens):
                         tokens += [""] * (len(header_tokens) - len(tokens))
                     if len(tokens) > len(header_tokens):
@@ -199,21 +216,26 @@ def _cargar_dataframe_desde_archivo(file_obj, nombre_archivo, delimiter=","):
 
                 df = pd.DataFrame(data_rows, columns=header_tokens)
                 return df
-        # ============================================================
-        # FIN BLOQUE PDF ESPECIAL
-        # ============================================================
 
-        # Si no se detectó cabecera PDF especial, procesar PDF normal
+        # ============================================================
+        # PARSEO PDF NORMAL (cuando no aplica caso especial)
+        # ============================================================
         header = df.iloc[0].tolist()
+
         if any(str(h).lower() in ["cliente", "instrumento", "mercado", "ejercicio"] for h in header):
             df.columns = header
             df = df[1:]
         else:
+            # Sin cabecera válida => asignar columnas genéricas
             df.columns = [f"col_{i}" for i in range(len(df.columns))]
 
         return df
 
+    # ============================================================
+    # Si no se reconoce el tipo
+    # ============================================================
     raise ValidationError("Tipo no soportado.")
+
 
 
 
