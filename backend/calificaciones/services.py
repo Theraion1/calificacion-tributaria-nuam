@@ -171,34 +171,39 @@ def _cargar_dataframe_desde_archivo(file_obj, nombre_archivo, delimiter=","):
         rows = _parse_pdf_text_to_rows(file_obj)
         df = pd.DataFrame(rows)
 
-        # --- NUEVO BLOQUE ESPECIAL PARA TU PDF ---
-        # Caso: todo viene en una sola columna tipo "col_0"
-        # y la primera fila tiene "identificador_cliente instrumento ..."
+        # ============================================================
+        # BLOQUE PDF ESPECIAL ROBUSTO
+        # ============================================================
         if df.shape[1] == 1:
-            first_val = str(df.iloc[0, 0]).strip().lower()
+            raw_header = str(df.iloc[0, 0]).strip().lower()
 
-            if "identificador_cliente" in first_val and "instrumento" in first_val:
-                # Cabecera separada por espacios
-                header_tokens = str(df.iloc[0, 0]).strip().split()
+            # Detectar cabecera verdadera
+            if "identificador_cliente" in raw_header and "instrumento" in raw_header:
+                splitter = r"\s{2,}"
 
-                def ajustar_tokens(tokens, n):
-                    # Ajusta cantidad de columnas: rellena con "" o corta
-                    if len(tokens) < n:
-                        tokens = tokens + [""] * (n - len(tokens))
-                    elif len(tokens) > n:
-                        tokens = tokens[:n]
-                    return tokens
+                header_tokens = re.split(splitter, str(df.iloc[0, 0]).strip())
+                header_tokens = [h.strip() for h in header_tokens if h.strip()]
 
                 data_rows = []
                 for val in df.iloc[1:, 0]:
-                    tokens = str(val).strip().split()
-                    data_rows.append(ajustar_tokens(tokens, len(header_tokens)))
+                    tokens = re.split(splitter, str(val).strip())
+                    tokens = [t.strip() for t in tokens if t.strip()]
+
+                    # Ajustar longitud exacta
+                    if len(tokens) < len(header_tokens):
+                        tokens += [""] * (len(header_tokens) - len(tokens))
+                    if len(tokens) > len(header_tokens):
+                        tokens = tokens[:len(header_tokens)]
+
+                    data_rows.append(tokens)
 
                 df = pd.DataFrame(data_rows, columns=header_tokens)
                 return df
-            # Si no es ese formato, seguimos con la lógica original
-        # --- FIN BLOQUE NUEVO ---
+        # ============================================================
+        # FIN BLOQUE PDF ESPECIAL
+        # ============================================================
 
+        # Si no se detectó cabecera PDF especial, procesar PDF normal
         header = df.iloc[0].tolist()
         if any(str(h).lower() in ["cliente", "instrumento", "mercado", "ejercicio"] for h in header):
             df.columns = header
@@ -209,6 +214,7 @@ def _cargar_dataframe_desde_archivo(file_obj, nombre_archivo, delimiter=","):
         return df
 
     raise ValidationError("Tipo no soportado.")
+
 
 
 
@@ -341,6 +347,9 @@ def procesar_archivo_carga_factores(archivo_carga, file_obj, corredor, delimiter
     for idx, row in df.iterrows():
         total += 1
         try:
+            # ------------------------------
+            # CAMPOS BÁSICOS
+            # ------------------------------
             row_dict = {
                 "identificador_cliente": str(_extraer_valor(row, "identificador_cliente", "")).strip(),
                 "instrumento": str(_extraer_valor(row, "instrumento", "")).strip(),
@@ -349,29 +358,39 @@ def procesar_archivo_carga_factores(archivo_carga, file_obj, corredor, delimiter
                 "secuencia_evento": str(_extraer_valor(row, "secuencia_evento", "")).strip(),
             }
 
-            # PAÍS
+            # =====================================================
+            #   DETECCIÓN DE PAÍS — FINAL
+            # =====================================================
+            pais_obj = None
+
+            # 1) Intentar encontrar columna 'pais'
             for k, v in row.items():
                 if "pais" in str(k).lower():
                     code = str(v).strip().upper()
-                    row_dict["pais"] = _detectar_pais_y_crear_si_falta(code)
+                    if code and len(code) >= 2 and code.isalpha():
+                        pais_obj = _detectar_pais_y_crear_si_falta(code)
                     break
-            if "pais" not in row_dict:
-                code, _ = DetectorPaisTributario.detectar_pais({
-                    "identificador_cliente": row_dict["identificador_cliente"],
-                    "instrumento": row_dict["instrumento"],
-                })
-                row_dict["pais"] = _detectar_pais_y_crear_si_falta(code) if code else None
 
-            # FACTORES (con fix val or 0)
+            # 2) Si no se obtuvo país válido → detección automática completa
+            if not pais_obj:
+                code, _ = DetectorPaisTributario.detectar_pais(row.to_dict())
+                pais_obj = _detectar_pais_y_crear_si_falta(code) if code else None
+
+            row_dict["pais"] = pais_obj
+
+            # ------------------------------
+            # FACTORES
+            # ------------------------------
             factores = {}
             for i in range(8, 20):
                 col = f"factor_{i}"
                 raw = _extraer_valor(row, col)
                 val = _normalizar_valor_decimal(raw)
-                val = val or Decimal("0")      # FIX FINAL
+                val = val or Decimal("0")
                 row_dict[col] = val
                 factores[col] = val
 
+            # MONTO vs FACTOR
             if _es_modo_monto(factores):
                 norm = _normalizar_factores_a_1(factores)
                 row_dict.update(norm)
@@ -379,7 +398,11 @@ def procesar_archivo_carga_factores(archivo_carga, file_obj, corredor, delimiter
             else:
                 row_dict["factor_actualizacion"] = sum(factores.values())
 
+            # ------------------------------
+            # CREAR / ACTUALIZAR
+            # ------------------------------
             obj, created = _obtener_o_crear_calificacion_from_row(row_dict, corredor, archivo_carga)
+
             nuevos += created
             actualizados += (1 - created)
 
@@ -387,7 +410,16 @@ def procesar_archivo_carga_factores(archivo_carga, file_obj, corredor, delimiter
             rechazados += 1
             errores.append({"fila": idx + 1, "error": str(e), "datos": row.to_dict()})
 
-    _finalizar_ok(archivo_carga, archivo_carga.started_at, total, nuevos, actualizados, rechazados, errores)
+    _finalizar_ok(
+        archivo_carga,
+        archivo_carga.started_at,
+        total,
+        nuevos,
+        actualizados,
+        rechazados,
+        errores,
+    )
+
 
 
 # ============================================================
@@ -413,7 +445,6 @@ def procesar_archivo_carga_monto(archivo_carga, file_obj, corredor, delimiter=",
     for idx, row in df.iterrows():
         total += 1
         try:
-
             row_dict = {
                 "identificador_cliente": str(_extraer_valor(row, "identificador_cliente", "")).strip(),
                 "instrumento": str(_extraer_valor(row, "instrumento", "")).strip(),
@@ -422,26 +453,33 @@ def procesar_archivo_carga_monto(archivo_carga, file_obj, corredor, delimiter=",
                 "secuencia_evento": str(_extraer_valor(row, "secuencia_evento", "")).strip(),
             }
 
-            # PAÍS
+            # =====================================================
+            #   DETECCIÓN DE PAÍS — FINAL
+            # =====================================================
+            pais_obj = None
+
             for k, v in row.items():
                 if "pais" in str(k).lower():
                     code = str(v).strip().upper()
-                    row_dict["pais"] = _detectar_pais_y_crear_si_falta(code)
+                    if code and len(code) >= 2 and code.isalpha():
+                        pais_obj = _detectar_pais_y_crear_si_falta(code)
                     break
-            if "pais" not in row_dict:
-                code, _ = DetectorPaisTributario.detectar_pais({
-                    "identificador_cliente": row_dict["identificador_cliente"],
-                    "instrumento": row_dict["instrumento"],
-                })
-                row_dict["pais"] = _detectar_pais_y_crear_si_falta(code) if code else None
 
-            # FACTORES
+            if not pais_obj:
+                code, _ = DetectorPaisTributario.detectar_pais(row.to_dict())
+                pais_obj = _detectar_pais_y_crear_si_falta(code) if code else None
+
+            row_dict["pais"] = pais_obj
+
+            # ------------------------------
+            # FACTORES / MONTOS
+            # ------------------------------
             factores = {}
             for i in range(8, 20):
                 col = f"factor_{i}"
                 raw = _extraer_valor(row, col)
                 val = _normalizar_valor_decimal(raw)
-                val = val or Decimal("0")      # FIX FINAL
+                val = val or Decimal("0")
                 row_dict[col] = val
                 factores[col] = val
 
@@ -453,6 +491,7 @@ def procesar_archivo_carga_monto(archivo_carga, file_obj, corredor, delimiter=",
             row_dict["factor_actualizacion"] = Decimal("1")
 
             obj, created = _obtener_o_crear_calificacion_from_row(row_dict, corredor, archivo_carga)
+
             nuevos += created
             actualizados += (1 - created)
 
@@ -460,7 +499,16 @@ def procesar_archivo_carga_monto(archivo_carga, file_obj, corredor, delimiter=",
             rechazados += 1
             errores.append({"fila": idx + 1, "error": str(e), "datos": row.to_dict()})
 
-    _finalizar_ok(archivo_carga, archivo_carga.started_at, total, nuevos, actualizados, rechazados, errores)
+    _finalizar_ok(
+        archivo_carga,
+        archivo_carga.started_at,
+        total,
+        nuevos,
+        actualizados,
+        rechazados,
+        errores,
+    )
+
 
 
 # ============================================================
