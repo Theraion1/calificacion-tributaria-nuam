@@ -315,6 +315,36 @@ class CalificacionTributariaViewSet(viewsets.ModelViewSet):
     def historial(self, request, pk=None):
         eventos = self.get_object().historial.select_related("usuario")
         return Response(HistorialCalificacionSerializer(eventos, many=True).data)
+    @action(detail=False, methods=["post"], url_path="eliminar-masivo")
+    def eliminar_masivo(self, request):
+        """
+        Elimina múltiples calificaciones en una sola operación.
+        Requiere permisos de admin, staff o corredor (solo sus propias calificaciones).
+        """
+        ids = request.data.get("ids", [])
+        if not isinstance(ids, list) or not ids:
+            return Response({"detail": "Debe enviar una lista de IDs."}, status=400)
+
+        user = request.user
+        perfil = getattr(user, "perfil", None)
+
+        qs = CalificacionTributaria.objects.filter(id__in=ids)
+
+        # Seguridad
+        if not (user.is_superuser or user.is_staff):
+            if not perfil or perfil.rol != "corredor":
+                return Response({"detail": "No autorizado."}, status=403)
+
+            qs = qs.filter(corredor=perfil.corredor)
+
+        eliminados = qs.count()
+        qs.delete()
+
+        return Response(
+            {"eliminados": eliminados, "ids": ids},
+            status=200
+        )
+
 
 
 
