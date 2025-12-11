@@ -1,11 +1,12 @@
 from django.contrib.auth import get_user_model
+from django.http import HttpResponse
+from django.core.exceptions import ValidationError
+
 from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.parsers import MultiPartParser, FormParser
-from django.http import HttpResponse
-from django.core.exceptions import ValidationError
 
 from .models import UsuarioPerfil
 from .serializers import (
@@ -100,7 +101,9 @@ class ConversionArchivoView(APIView):
     """
     Endpoint para conversión de archivos.
     - POST /api/conversion/archivo/?accion=preview
+      -> JSON con columns, rows, total_rows
     - POST /api/conversion/archivo/?accion=convertir
+      -> descarga del archivo convertido
     """
 
     permission_classes = [IsAuthenticated]
@@ -110,7 +113,12 @@ class ConversionArchivoView(APIView):
         accion = request.query_params.get("accion", "preview").lower()
         file_obj = request.FILES.get("archivo")
         formato_destino = request.data.get("formato_destino")
-        delimitador = request.data.get("delimitador", ",")
+
+        # Blindaje extra en la vista:
+        # si viene vacío o con más de 1 carácter, lo forzamos a ","
+        delimitador = (request.data.get("delimitador") or ",").strip()
+        if len(delimitador) != 1:
+            delimitador = ","
 
         if not file_obj:
             return Response(
@@ -121,7 +129,9 @@ class ConversionArchivoView(APIView):
         try:
             if accion == "preview":
                 data = generar_vista_previa_archivo(
-                    file_obj, file_obj.name, delimiter=delimitador
+                    file_obj,
+                    file_obj.name,
+                    delimiter=delimitador,
                 )
                 return Response(data, status=status.HTTP_200_OK)
 
@@ -134,7 +144,7 @@ class ConversionArchivoView(APIView):
                 )
 
                 response = HttpResponse(buffer.getvalue(), content_type=mimetype)
-                response["Content-Disposition"] = f'attachment; filename="{out_name}"'
+                response["Content-Disposition"] = f'attachment; filename=\"{out_name}\"'
                 return response
 
             else:
