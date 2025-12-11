@@ -3,12 +3,14 @@ from rest_framework.decorators import action
 from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.response import Response
 from rest_framework.exceptions import PermissionDenied
+from rest_framework.views import APIView
 
 from django.core.files.storage import default_storage
 from django.db.models import Q
 from decimal import Decimal
 from django.forms.models import model_to_dict
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.http import HttpResponse
 
 from .models import (
     Pais,
@@ -28,6 +30,8 @@ from .services import (
     procesar_archivo_carga,
     procesar_archivo_carga_monto,
     DetectorPaisTributario,
+    generar_vista_previa_archivo,
+    convertir_archivo_generico,
 )
 
 
@@ -697,3 +701,68 @@ class HistorialCalificacionViewSet(viewsets.ReadOnlyModelViewSet):
         if calif_id:
             qs = qs.filter(calificacion_id=calif_id)
         return qs.order_by("-creado_en")
+
+
+class ConversionArchivoView(APIView):
+    """
+    Endpoint para conversión de archivos.
+    - POST /api/conversion/archivo/?accion=preview
+      -> JSON con columns, rows, total_rows
+    - POST /api/conversion/archivo/?accion=convertir
+      -> descarga del archivo convertido
+    """
+
+    permission_classes = [permissions.IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser]
+
+    def post(self, request):
+        accion = request.query_params.get("accion", "preview").lower()
+        file_obj = request.FILES.get("archivo")
+        formato_destino = request.data.get("formato_destino")
+
+        # Delimitador robusto: si viene vacío o raro, se corrige aquí
+        delimitador = (request.data.get("delimitador") or ",").strip()
+        if len(delimitador) != 1:
+            delimitador = ","
+
+        if not file_obj:
+            return Response(
+                {"detail": "No se recibió ningún archivo."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            if accion == "preview":
+                data = generar_vista_previa_archivo(
+                    file_obj,
+                    file_obj.name,
+                    delimiter=delimitador,
+                )
+                return Response(data, status=status.HTTP_200_OK)
+
+            elif accion == "convertir":
+                buffer, out_name, mimetype = convertir_archivo_generico(
+                    file_obj,
+                    file_obj.name,
+                    formato_destino=formato_destino,
+                    delimiter=delimitador,
+                )
+
+                response = HttpResponse(buffer.getvalue(), content_type=mimetype)
+                response["Content-Disposition"] = f'attachment; filename="{out_name}"'
+                return response
+
+            else:
+                return Response(
+                    {"detail": "Acción no válida. Use 'preview' o 'convertir'."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        except DjangoValidationError as e:
+            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+        except Exception as e:
+            return Response(
+                {"detail": f"Error inesperado: {e}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )

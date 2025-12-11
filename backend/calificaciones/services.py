@@ -725,8 +725,27 @@ def notificar_resultado_archivo(archivo_carga: ArchivoCarga):
 # CONVERSION DE ARCHIVOS (Excel <-> CSV, PDF -> Excel)
 # =====================================================================
 
+def _sanitizar_delimitador(delimiter: str) -> str:
+    """
+    Normaliza el delimitador:
+    - Si viene vacío o None, usa coma ","
+    - Si tiene más de 1 carácter, usa coma ","
+    - Solo permite un único carácter.
+    """
+    d = (delimiter or ",")
+    if isinstance(d, str):
+        d = d.strip()
+    if not d or len(d) != 1:
+        d = ","
+    return d
+
+
 def _leer_archivo_a_dataframe_generico(file_obj, filename: str, delimiter: str = ","):
-    """Lee un archivo subido (CSV, XLSX/XLS, PDF) y lo convierte en un DataFrame."""
+    """
+    Lee un archivo subido (CSV, XLSX/XLS, PDF) y lo convierte en un DataFrame.
+    Usa _sanitizar_delimitador para asegurarse de que el delimitador sea válido.
+    """
+    delimiter = _sanitizar_delimitador(delimiter)
     ext = os.path.splitext(filename)[1].lower()
 
     if ext == ".csv":
@@ -756,15 +775,30 @@ def _leer_archivo_a_dataframe_generico(file_obj, filename: str, delimiter: str =
     return df
 
 
-def convertir_archivo_generico(file_obj, filename: str, formato_destino: str, delimiter: str = ","):
-    """Convierte un archivo a otro formato soportado."""
+def convertir_archivo_generico(
+    file_obj,
+    filename: str,
+    formato_destino: str,
+    delimiter: str = ",",
+):
+    """
+    Convierte un archivo a otro formato soportado:
+      - EXCEL_TO_CSV
+      - CSV_TO_EXCEL
+      - PDF_TO_EXCEL
+
+    Devuelve (bytes_io, nombre_salida, mimetype).
+    """
+    import io as _io
+
+    delimiter = _sanitizar_delimitador(delimiter)
     formato = (formato_destino or "").upper().strip()
     if formato not in {"EXCEL_TO_CSV", "CSV_TO_EXCEL", "PDF_TO_EXCEL"}:
         raise ValidationError("Formato de conversión no soportado.")
 
     df = _leer_archivo_a_dataframe_generico(file_obj, filename, delimiter=delimiter)
 
-    buffer = io.BytesIO()
+    buffer = _io.BytesIO()
 
     if formato == "EXCEL_TO_CSV":
         df.to_csv(buffer, index=False, sep=delimiter)
@@ -783,8 +817,17 @@ def convertir_archivo_generico(file_obj, filename: str, formato_destino: str, de
     return buffer, out_name, mimetype
 
 
-def generar_vista_previa_archivo(file_obj, filename: str, delimiter: str = ",", max_filas: int = 50):
-    """Devuelve una vista previa (JSON) con columnas y primeras filas."""
+def generar_vista_previa_archivo(
+    file_obj,
+    filename: str,
+    delimiter: str = ",",
+    max_filas: int = 50,
+):
+    """
+    Devuelve una vista previa en JSON: columnas + primeras filas.
+    Usa _sanitizar_delimitador para que nunca falle por delimitador inválido.
+    """
+    delimiter = _sanitizar_delimitador(delimiter)
     df = _leer_archivo_a_dataframe_generico(file_obj, filename, delimiter=delimiter)
     df_preview = df.head(max_filas).fillna("")
 
@@ -793,3 +836,4 @@ def generar_vista_previa_archivo(file_obj, filename: str, delimiter: str = ",", 
         "rows": df_preview.to_dict(orient="records"),
         "total_rows": int(df.shape[0]),
     }
+
