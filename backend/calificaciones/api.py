@@ -51,15 +51,11 @@ class IsAdminOrAuditor(permissions.BasePermission):
         if not user or not user.is_authenticated:
             return False
 
-        # Django admin / staff
         if user.is_superuser or user.is_staff:
             return True
 
         perfil = getattr(user, "perfil", None)
-        if not perfil:
-            return False
-
-        return perfil.rol in ["admin", "auditor"]
+            return perfil and perfil.rol in ["admin", "auditor"]
 
 class CalificacionPermission(permissions.BasePermission):
     def has_permission(self, request, view):
@@ -477,21 +473,13 @@ class ArchivoCargaViewSet(viewsets.ModelViewSet):
 # ============================================================
 
 class HistorialCalificacionViewSet(viewsets.ReadOnlyModelViewSet):
-    """
-    Permite consultar el historial de calificaciones.
-    Solo lectura: list y retrieve.
-    Se puede filtrar por ?calificacion=<id>
-    """
-
     serializer_class = HistorialCalificacionSerializer
     permission_classes = [IsAdminOrAuditor]
 
     def get_queryset(self):
-        qs = HistorialCalificacion.objects.select_related("calificacion", "usuario")
-        calif_id = self.request.query_params.get("calificacion")
-        if calif_id:
-            qs = qs.filter(calificacion_id=calif_id)
-        return qs.order_by("-creado_en")
+        return HistorialCalificacion.objects.select_related(
+            "calificacion", "usuario"
+        ).order_by("-creado_en")
 
 
 
