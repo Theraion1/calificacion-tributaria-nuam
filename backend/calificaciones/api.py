@@ -44,6 +44,23 @@ class IsStaffOrReadOnly(permissions.BasePermission):
             return True
         return request.user and request.user.is_staff
 
+class IsAdminOrAuditor(permissions.BasePermission):
+    def has_permission(self, request, view):
+        user = request.user
+
+        if not user or not user.is_authenticated:
+            return False
+
+        # Django admin / staff
+        if user.is_superuser or user.is_staff:
+            return True
+
+        perfil = getattr(user, "perfil", None)
+        if not perfil:
+            return False
+
+        return perfil.rol in ["admin", "auditor"]
+
 
 
 class CalificacionPermission(permissions.BasePermission):
