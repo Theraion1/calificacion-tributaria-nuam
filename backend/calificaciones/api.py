@@ -25,6 +25,7 @@ from .serializers import (
     CalificacionTributariaSerializer,
     ArchivoCargaSerializer,
     HistorialCalificacionSerializer,
+    ArchivoCargaHistorialSerializer,
 )
 from .services import (
     procesar_archivo_carga,
