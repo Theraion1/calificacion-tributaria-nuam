@@ -476,7 +476,7 @@ class ArchivoCargaViewSet(viewsets.ModelViewSet):
 
 class HistorialArchivosViewSet(viewsets.ReadOnlyModelViewSet):
 
-    serializer_class = ArchivoCargaHistorialSerializer
+    serializer_class = HistorialCalificacionSerializer
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
