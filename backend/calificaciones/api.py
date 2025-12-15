@@ -474,21 +474,26 @@ class ArchivoCargaViewSet(viewsets.ModelViewSet):
 # HISTORIAL GLOBAL (ViewSet Independiente)
 # ============================================================
 
-class HistorialCalificacionViewSet(viewsets.ReadOnlyModelViewSet):
-    serializer_class = HistorialCalificacionSerializer
-    permission_classes = [IsAdminOrAuditor]
+class HistorialArchivosViewSet(viewsets.ReadOnlyModelViewSet):
+
+    serializer_class = ArchivoCargaHistorialSerializer
+    permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        qs = HistorialCalificacion.objects.select_related(
-            "calificacion",
-            "usuario"
-        )
+        qs = ArchivoCarga.objects.select_related(
+            "submitted_by",
+            "corredor",
+        ).order_by("-creado_en")
 
-        calif_id = self.request.query_params.get("calificacion")
-        if calif_id:
-            qs = qs.filter(calificacion_id=calif_id)
+        user = self.request.user
+        perfil = getattr(user, "perfil", None)
 
-        return qs.order_by("-creado_en")
+        # Admin / Auditor
+        if user.is_staff or (perfil and perfil.rol in ["Administrador", "Auditor"]):
+            return qs
+
+        # Usuario normal
+        return qs.filter(submitted_by=user)
 
 
 
