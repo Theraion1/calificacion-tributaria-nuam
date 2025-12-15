@@ -44,21 +44,6 @@ class IsStaffOrReadOnly(permissions.BasePermission):
             return True
         return request.user and request.user.is_staff
 
-class IsAdminOrAuditor(permissions.BasePermission):
-    def has_permission(self, request, view):
-        user = request.user
-
-        if not user or not user.is_authenticated:
-            return False
-
-        if user.is_superuser or user.is_staff:
-            return True
-
-        perfil = getattr(user, "perfil", None)
-        return perfil and perfil.rol in ["admin", "auditor"]
-
-
-
 class CalificacionPermission(permissions.BasePermission):
     def has_permission(self, request, view):
         user = request.user
@@ -115,10 +100,7 @@ class IsAdminOrAuditor(permissions.BasePermission):
             return True
 
         perfil = getattr(user, "perfil", None)
-        if not perfil:
-            return False
-
-        return perfil.rol in ["Administrador", "Auditor"]
+        return perfil and perfil.rol in ["admin", "auditor"]
 
 
 class ArchivoCargaPermission(permissions.BasePermission):
@@ -476,7 +458,7 @@ class ArchivoCargaViewSet(viewsets.ModelViewSet):
 
 class HistorialArchivosViewSet(viewsets.ReadOnlyModelViewSet):
 
-    serializer_class = HistorialCalificacionSerializer
+    serializer_class = ArchivoCargaHistorialSerializer
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
