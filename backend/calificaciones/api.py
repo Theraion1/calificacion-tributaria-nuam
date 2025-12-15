@@ -47,15 +47,16 @@ class IsStaffOrReadOnly(permissions.BasePermission):
 class IsAdminOrAuditor(permissions.BasePermission):
     def has_permission(self, request, view):
         user = request.user
+
         if not user or not user.is_authenticated:
             return False
 
+        if user.is_superuser or user.is_staff:
+            return True
+
         perfil = getattr(user, "perfil", None)
-        return (
-            user.is_superuser
-            or user.is_staff
-            or (perfil and perfil.rol in ["admin", "auditor"])
-        )
+        return perfil and perfil.rol in ["admin", "auditor"]
+
 
 
 class CalificacionPermission(permissions.BasePermission):
@@ -478,9 +479,16 @@ class HistorialCalificacionViewSet(viewsets.ReadOnlyModelViewSet):
     permission_classes = [IsAdminOrAuditor]
 
     def get_queryset(self):
-        return HistorialCalificacion.objects.select_related(
-            "calificacion", "usuario"
-        ).order_by("-creado_en")
+        qs = HistorialCalificacion.objects.select_related(
+            "calificacion",
+            "usuario"
+        )
+
+        calif_id = self.request.query_params.get("calificacion")
+        if calif_id:
+            qs = qs.filter(calificacion_id=calif_id)
+
+        return qs.order_by("-creado_en")
 
 
 
