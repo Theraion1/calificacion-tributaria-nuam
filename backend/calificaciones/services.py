@@ -291,11 +291,11 @@ def _detectar_pais_y_crear_si_falta(code):
 # ============================================================
 
 def _obtener_o_crear_calificacion_from_row(row_dict, corredor, archivo_carga):
-    ident = row_dict.get("identificador_cliente")
+    ident = corredor.identificador if hasattr(corredor, "identificador") else corredor.id
     inst = row_dict.get("instrumento")
 
-    if not ident or not inst:
-        raise ValidationError("identificador_cliente e instrumento son obligatorios.")
+    if not inst:
+        raise ValidationError("instrumento es obligatorio.")
 
     ejercicio = row_dict.get("ejercicio") or timezone.now().year
     mercado = row_dict.get("mercado")
@@ -381,7 +381,6 @@ def procesar_archivo_carga_factores(archivo_carga, file_obj, corredor, delimiter
             # CAMPOS BÁSICOS
             # ------------------------------
             row_dict = {
-                "identificador_cliente": str(_extraer_valor(row, "identificador_cliente", "")).strip(),
                 "instrumento": str(_extraer_valor(row, "instrumento", "")).strip(),
                 "mercado": str(_extraer_valor(row, "mercado", "")).strip(),
                 "ejercicio": str(_extraer_valor(row, "ejercicio", "")).strip(),
@@ -476,7 +475,6 @@ def procesar_archivo_carga_monto(archivo_carga, file_obj, corredor, delimiter=",
         total += 1
         try:
             row_dict = {
-                "identificador_cliente": str(_extraer_valor(row, "identificador_cliente", "")).strip(),
                 "instrumento": str(_extraer_valor(row, "instrumento", "")).strip(),
                 "mercado": str(_extraer_valor(row, "mercado", "")).strip(),
                 "ejercicio": str(_extraer_valor(row, "ejercicio", "")).strip(),
