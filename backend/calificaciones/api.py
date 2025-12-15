@@ -120,6 +120,7 @@ class IsAdminOrAuditor(permissions.BasePermission):
 
         return perfil.rol in ["Administrador", "Auditor"]
 
+
 class ArchivoCargaPermission(permissions.BasePermission):
     def has_permission(self, request, view):
         user = request.user
