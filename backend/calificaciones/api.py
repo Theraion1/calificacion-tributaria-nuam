@@ -111,7 +111,6 @@ class IsAdminOrAuditor(permissions.BasePermission):
         if not user or not user.is_authenticated:
             return False
 
-        # Django admin / staff
         if user.is_superuser or user.is_staff:
             return True
 
@@ -119,7 +118,7 @@ class IsAdminOrAuditor(permissions.BasePermission):
         if not perfil:
             return False
 
-        return perfil.rol in ["admin", "auditor"]
+        return perfil.rol in ["Administrador", "Auditor"]
 
 class ArchivoCargaPermission(permissions.BasePermission):
     def has_permission(self, request, view):
