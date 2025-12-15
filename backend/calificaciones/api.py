@@ -47,15 +47,16 @@ class IsStaffOrReadOnly(permissions.BasePermission):
 class IsAdminOrAuditor(permissions.BasePermission):
     def has_permission(self, request, view):
         user = request.user
-
         if not user or not user.is_authenticated:
             return False
 
-        if user.is_superuser or user.is_staff:
-            return True
-
         perfil = getattr(user, "perfil", None)
-            return perfil and perfil.rol in ["admin", "auditor"]
+        return (
+            user.is_superuser
+            or user.is_staff
+            or (perfil and perfil.rol in ["admin", "auditor"])
+        )
+
 
 class CalificacionPermission(permissions.BasePermission):
     def has_permission(self, request, view):
