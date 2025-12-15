@@ -61,8 +61,6 @@ class IsAdminOrAuditor(permissions.BasePermission):
 
         return perfil.rol in ["admin", "auditor"]
 
-
-
 class CalificacionPermission(permissions.BasePermission):
     def has_permission(self, request, view):
         user = request.user
