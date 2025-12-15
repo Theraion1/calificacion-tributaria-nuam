@@ -449,7 +449,7 @@ class HistorialCalificacionViewSet(viewsets.ReadOnlyModelViewSet):
     """
 
     serializer_class = HistorialCalificacionSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [IsAdminOrAuditor]
 
     def get_queryset(self):
         qs = HistorialCalificacion.objects.select_related("calificacion", "usuario")
