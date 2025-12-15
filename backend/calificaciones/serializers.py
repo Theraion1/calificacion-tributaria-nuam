@@ -27,6 +27,7 @@ class CorredorSerializer(serializers.ModelSerializer):
 
 
 class CalificacionTributariaSerializer(serializers.ModelSerializer):
+    identificador_cliente = serializers.CharField(read_only=True)
     class Meta:
         model = CalificacionTributaria
         fields = "__all__"

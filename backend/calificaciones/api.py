@@ -247,13 +247,14 @@ class CalificacionTributariaViewSet(viewsets.ModelViewSet):
         user = self.request.user
 
         if user.is_superuser or user.is_staff:
-            serializer.save(creado_por=user, actualizado_por=user)
+            serializer.save(identificador_cliente=user.username, creado_por=user, actualizado_por=user)
         else:
             perfil = getattr(user, "perfil", None)
             if not perfil or perfil.rol != "corredor":
                 raise PermissionDenied("Solo corredores pueden crear calificaciones.")
             serializer.save(
                 corredor=perfil.corredor,
+                identificador_cliente=user.username,
                 creado_por=user,
                 actualizado_por=user,
             )
