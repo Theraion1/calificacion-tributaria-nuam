@@ -201,6 +201,15 @@ class ArchivoCargaHistorialSerializer(serializers.ModelSerializer):
         source="corredor.nombre",
         read_only=True
     )
+    class ArchivoCargaHistorialSerializer(serializers.ModelSerializer):
+    usuario = serializers.CharField(
+        source="submitted_by.username",
+        read_only=True
+    )
+    corredor_nombre = serializers.CharField(
+        source="corredor.nombre",
+        read_only=True
+    )
 
     class Meta:
         model = ArchivoCarga
