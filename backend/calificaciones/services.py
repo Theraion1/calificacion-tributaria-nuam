@@ -322,10 +322,10 @@ def _obtener_o_crear_calificacion_from_row(row_dict, corredor, archivo_carga):
         ejercicio=ejercicio,
         mercado=mercado,
         defaults={
-            defaults,
-        "identificador_cliente": ident,
-    },
-)
+            **defaults,
+            "identificador_cliente": ident,
+        },
+    )
 
     if secuencia and secuencia.isdigit():
         obj.secuencia_evento = secuencia
