@@ -292,9 +292,14 @@ def _detectar_pais_y_crear_si_falta(code):
 
 def _obtener_o_crear_calificacion_from_row(row_dict, corredor, archivo_carga):
     row = { k.strip().lower().replace(" ", "_").replace("-", "_"): v for k, v in row_dict.items()}
-    ident = (row_dict.get("identificador_cliente") or row_dict.get("id_cliente") or row_dict.get("cliente") or (corredor.identificador if hasattr(corredor, "identificador") else corredor.id))
-    inst = row_dict.get("instrumento")
+    ident = (row_dict.get("identificador_cliente") or row_dict.get("id_cliente") or row_dict.get("cliente") 
+    or (corredor.identificador if hasattr(corredor, "identificador") else corredor.id))
 
+    if isinstance(ident, int) or (isinstance(ident, str) and ident.isdigit()):
+        ident = archivo_carga.submitted_by.username
+
+    inst = row_dict.get("instrumento")
+    
     if not inst:
         raise ValidationError("instrumento es obligatorio.")
 
@@ -387,6 +392,16 @@ def procesar_archivo_carga_factores(archivo_carga, file_obj, corredor, delimiter
                 "ejercicio": str(_extraer_valor(row, "ejercicio", "")).strip(),
                 "secuencia_evento": str(_extraer_valor(row, "secuencia_evento", "")).strip(),
             }
+
+            # ==============================
+            # IDENTIFICADOR CLIENTE 
+            # ==============================
+            identificador = (_extraer_valor(row, "identificador_cliente")
+                    or _extraer_valor(row, "id_cliente")
+                    or _extraer_valor(row, "cliente"))
+
+            if identificador:
+                row_dict["identificador_cliente"] = str(identificador).strip()
 
             # =====================================================
             #   DETECCIÓN DE PAÍS — FINAL
@@ -481,6 +496,16 @@ def procesar_archivo_carga_monto(archivo_carga, file_obj, corredor, delimiter=",
                 "ejercicio": str(_extraer_valor(row, "ejercicio", "")).strip(),
                 "secuencia_evento": str(_extraer_valor(row, "secuencia_evento", "")).strip(),
             }
+
+            # ==============================
+            # IDENTIFICADOR CLIENTE 
+            # ==============================
+            identificador = (_extraer_valor(row, "identificador_cliente")
+                    or _extraer_valor(row, "id_cliente")
+                    or _extraer_valor(row, "cliente"))
+
+            if identificador:
+                row_dict["identificador_cliente"] = str(identificador).strip()
 
             # =====================================================
             #   DETECCIÓN DE PAÍS — FINAL
