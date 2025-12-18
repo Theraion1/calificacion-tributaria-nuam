@@ -291,7 +291,7 @@ def _detectar_pais_y_crear_si_falta(code):
 # ============================================================
 
 def _obtener_o_crear_calificacion_from_row(row_dict, corredor, archivo_carga):
-    ident = corredor.identificador if hasattr(corredor, "identificador") else corredor.id
+    ident = (row_dict.get("identificador_cliente") or row_dict.get("id_cliente") or row_dict.get("cliente") or (corredor.identificador if hasattr(corredor, "identificador") else corredor.id))
     inst = row_dict.get("instrumento")
 
     if not inst:
