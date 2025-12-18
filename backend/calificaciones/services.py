@@ -291,7 +291,8 @@ def _detectar_pais_y_crear_si_falta(code):
 # ============================================================
 
 def _obtener_o_crear_calificacion_from_row(row_dict, corredor, archivo_carga):
-    ident = corredor.identificador if hasattr(corredor, "identificador") else corredor.id
+    row = { k.strip().lower().replace(" ", "_").replace("-", "_"): v for k, v in row_dict.items()}
+    ident = (row_dict.get("identificador_cliente") or row_dict.get("id_cliente") or row_dict.get("cliente") or (corredor.identificador if hasattr(corredor, "identificador") else corredor.id))
     inst = row_dict.get("instrumento")
 
     if not inst:
@@ -304,7 +305,7 @@ def _obtener_o_crear_calificacion_from_row(row_dict, corredor, archivo_carga):
     defaults = {
         "corredor": corredor,
         "archivo_origen": archivo_carga,
-        "pais": row_dict.get("pais"),
+        "pais": row_dict.get("pais") or corredor.pais,
         "mercado": mercado,
         "ejercicio": ejercicio,
         "valor_historico": row_dict.get("valor_historico") or Decimal("0"),
@@ -317,11 +318,13 @@ def _obtener_o_crear_calificacion_from_row(row_dict, corredor, archivo_carga):
 
     obj, created = CalificacionTributaria.objects.update_or_create(
         corredor=corredor,
-        identificador_cliente=ident,
         instrumento=inst,
         ejercicio=ejercicio,
         mercado=mercado,
-        defaults=defaults,
+        defaults={
+            **defaults,
+            "identificador_cliente": ident,
+        },
     )
 
     if secuencia and secuencia.isdigit():
