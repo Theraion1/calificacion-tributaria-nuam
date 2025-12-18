@@ -304,7 +304,7 @@ def _obtener_o_crear_calificacion_from_row(row_dict, corredor, archivo_carga):
     defaults = {
         "corredor": corredor,
         "archivo_origen": archivo_carga,
-        "pais": row_dict.get("pais") or corredor.pais,,
+        "pais": row_dict.get("pais") or corredor.pais,
         "mercado": mercado,
         "ejercicio": ejercicio,
         "valor_historico": row_dict.get("valor_historico") or Decimal("0"),
