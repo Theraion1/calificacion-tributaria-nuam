@@ -40,6 +40,16 @@ class CalificacionTributariaSerializer(serializers.ModelSerializer):
             "creado_en",
             "actualizado_en",
         ]
+        
+    def create(self, validated_data):
+        request = self.context.get("request")
+        perfil = getattr(request.user, "perfil", None) if request else None
+        corredor = getattr(perfil, "corredor", None)
+        
+        if not validated_data.get("pais") and corredor and corredor.pais:
+            validated_data["pais"] = corredor.pais
+
+        return super().create(validated_data)
 
 
 class ArchivoCargaSerializer(serializers.ModelSerializer):
