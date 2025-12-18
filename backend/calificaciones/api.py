@@ -26,6 +26,7 @@ from .serializers import (
     ArchivoCargaSerializer,
     HistorialCalificacionSerializer,
     ArchivoCargaHistorialSerializer,
+    HistorialPagination,
 )
 from .services import (
     procesar_archivo_carga,
@@ -462,6 +463,7 @@ class HistorialArchivosViewSet(viewsets.ReadOnlyModelViewSet):
 
     serializer_class = ArchivoCargaHistorialSerializer
     permission_classes = [permissions.IsAuthenticated]
+    pagination_class = HistorialPagination
 
     def get_queryset(self):
         qs = ArchivoCarga.objects.select_related(

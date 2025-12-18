@@ -1,6 +1,8 @@
 from django.contrib.auth import get_user_model
 from rest_framework import serializers
+from rest_framework.pagination import PageNumberPagination
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
+
 
 from .models import (
     Pais,
@@ -62,6 +64,11 @@ class HistorialCalificacionSerializer(serializers.ModelSerializer):
     class Meta:
         model = HistorialCalificacion
         fields = "__all__"
+
+class HistorialPagination(PageNumberPagination):
+    page_size = 25                 
+    page_size_query_param = "page_size"
+    max_page_size = 50
 
 
 class RegistroCorredorSerializer(serializers.Serializer):
