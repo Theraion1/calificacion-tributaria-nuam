@@ -318,11 +318,12 @@ def _obtener_o_crear_calificacion_from_row(row_dict, corredor, archivo_carga):
 
     obj, created = CalificacionTributaria.objects.update_or_create(
         corredor=corredor,
-        identificador_cliente=ident,
         instrumento=inst,
         ejercicio=ejercicio,
         mercado=mercado,
-        defaults=defaults,
+        defaults={
+            defaults,
+        "identificador_cliente":ident,},
     )
 
     if secuencia and secuencia.isdigit():
