@@ -251,19 +251,31 @@ class CalificacionTributariaViewSet(viewsets.ModelViewSet):
         Devuelve mercados y períodos comerciales reales
         según los datos existentes y permisos del usuario.
         """
-        qs = self.get_queryset()
+        user = request.user
+        qs = CalificacionTributaria.objects.all()
+
+        if not (user.is_superuser or user.is_staff):
+            perfil = getattr(user, "perfil", None)
+                if not perfil:
+                    return Response({"mercados": [], "periodos": []})
+
+        if perfil.rol == "corredor":
+            qs = qs.filter(corredor=perfil.corredor)
+                elif perfil.rol != "auditor":
+                    return Response({"mercados": [], "periodos": []})
 
         mercados = (
             qs.values_list("mercado", flat=True)
+            .exclude(mercado__isnull=True)
+            .exclude(mercado__exact="")
             .distinct()
-            .order_by("mercado")
-        )
+            .order_by("mercado"))
 
         periodos = (
             qs.values_list("ejercicio", flat=True)
+            .exclude(ejercicio__isnull=True)
             .distinct()
-            .order_by("-ejercicio")
-        )
+            .order_by("-ejercicio"))
 
         return Response({
             "mercados": list(mercados),
