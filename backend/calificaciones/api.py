@@ -4,6 +4,7 @@ from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.response import Response
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.views import APIView
+from django.db.models import Q
 
 from django.core.files.storage import default_storage
 from django.db.models import Q
@@ -240,6 +241,35 @@ class CalificacionTributariaViewSet(viewsets.ModelViewSet):
             qs = qs.filter(creado_en__date__lte=creado_hasta)
 
         return qs.order_by("-creado_en")
+
+    # ----------------------------------------
+    # FILTROS DINÁMICOS
+    # ----------------------------------------
+    @action(detail=False, methods=["get"], url_path="filtros")
+    def filtros(self, request):
+        """
+        Devuelve mercados y períodos comerciales reales
+        según los datos existentes y permisos del usuario.
+        """
+        qs = self.get_queryset()
+
+        mercados = (
+            qs.values_list("mercado", flat=True)
+            .distinct()
+            .order_by("mercado")
+        )
+
+        periodos = (
+            qs.values_list("ejercicio", flat=True)
+            .distinct()
+            .order_by("-ejercicio")
+        )
+
+        return Response({
+            "mercados": list(mercados),
+            "periodos": list(periodos),
+        })
+
 
     # ----------------------------------------
     # CREATE / UPDATE

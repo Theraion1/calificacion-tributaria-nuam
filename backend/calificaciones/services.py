@@ -245,9 +245,6 @@ def _cargar_dataframe_desde_archivo(file_obj, nombre_archivo, delimiter=","):
 
 
 
-
-
-
 def _extraer_valor(df_row, col, default=None):
     return df_row[col] if col in df_row.index else default
 
@@ -299,7 +296,7 @@ def _obtener_o_crear_calificacion_from_row(row_dict, corredor, archivo_carga):
         ident = archivo_carga.submitted_by.username
 
     inst = row_dict.get("instrumento")
-    
+
     if not inst:
         raise ValidationError("instrumento es obligatorio.")
 
@@ -465,8 +462,6 @@ def procesar_archivo_carga_factores(archivo_carga, file_obj, corredor, delimiter
         errores,
     )
 
-
-
 # ============================================================
 # PROCESAR MONTO
 # ============================================================
@@ -562,8 +557,6 @@ def procesar_archivo_carga_monto(archivo_carga, file_obj, corredor, delimiter=",
         rechazados,
         errores,
     )
-
-
 
 # ============================================================
 # FINALIZADORES
