@@ -30,6 +30,7 @@ class CorredorSerializer(serializers.ModelSerializer):
 
 class CalificacionTributariaSerializer(serializers.ModelSerializer):
     identificador_cliente = serializers.CharField(read_only=True)
+    fecha_pago = serializers.DateField( required=False, allow_null=True)
     class Meta:
         model = CalificacionTributaria
         fields = "__all__"
@@ -47,6 +48,8 @@ class CalificacionTributariaSerializer(serializers.ModelSerializer):
         request = self.context.get("request")
         perfil = getattr(request.user, "perfil", None) if request else None
         corredor = getattr(perfil, "corredor", None)
+
+        print("FECHA_PAGO EN VALIDATED_DATA:", validated_data.get("fecha_pago"))
         
         if not validated_data.get("pais") and corredor and corredor.pais:
             validated_data["pais"] = corredor.pais
