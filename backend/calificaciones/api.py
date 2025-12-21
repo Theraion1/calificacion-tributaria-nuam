@@ -262,9 +262,7 @@ class CalificacionTributariaViewSet(viewsets.ModelViewSet):
 
         if perfil.rol == "corredor":
             qs = qs.filter(corredor=perfil.corredor)
-        elif perfil.rol == "auditor":
-            pass
-        else:
+        elif perfil.rol != "auditor":
             return Response({"mercados": [], "periodos": []})
 
         mercados = (
