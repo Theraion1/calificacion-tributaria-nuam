@@ -256,15 +256,16 @@ class CalificacionTributariaViewSet(viewsets.ModelViewSet):
 
         if not (user.is_superuser or user.is_staff):
             perfil = getattr(user, "perfil", None)
-                
-            if not perfil:
-                return Response({"mercados": [], "periodos": []})
 
-            if perfil.rol == "corredor":
+        if not perfil:
+            return Response({"mercados": [], "periodos": []})
+
+        if perfil.rol == "corredor":
             qs = qs.filter(corredor=perfil.corredor)
-                
-            elif perfil.rol != "auditor":
-                return Response({"mercados": [], "periodos": []})
+        elif perfil.rol == "auditor":
+            pass
+        else:
+            return Response({"mercados": [], "periodos": []})
 
         mercados = (
             qs.values_list("mercado", flat=True)
