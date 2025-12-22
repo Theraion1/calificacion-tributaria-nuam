@@ -67,6 +67,10 @@ class HistorialCalificacionSerializer(serializers.ModelSerializer):
         source="usuario.username",
         read_only=True)
 
+    estado_calificacion = serializers.CharField(
+        source="calificacion.estado",
+        read_only=True)
+
     class Meta:
         model = HistorialCalificacion
         fields = (
@@ -75,6 +79,7 @@ class HistorialCalificacionSerializer(serializers.ModelSerializer):
             "usuario",
             "accion",
             "descripcion_cambio",
+            "estado_calificacion",
         )
 
 class HistorialPagination(PageNumberPagination):
