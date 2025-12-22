@@ -519,7 +519,7 @@ class ArchivoCargaViewSet(viewsets.ModelViewSet):
 
 
 # ============================================================
-# HISTORIAL GLOBAL (ViewSet Independiente)
+# HISTORIAL GLOBAL
 # ============================================================
 
 class HistorialArchivosViewSet(viewsets.ReadOnlyModelViewSet):
@@ -544,6 +544,16 @@ class HistorialArchivosViewSet(viewsets.ReadOnlyModelViewSet):
         # Usuario normal
         return qs.filter(submitted_by=user)
 
+class HistorialCalificacionesViewSet(viewsets.ReadOnlyModelViewSet):
+    serializer_class = HistorialCalificacionSerializer
+    permission_classes = [IsAdminOrAuditor]
+    pagination_class = HistorialPagination
+
+    def get_queryset(self):
+        return HistorialCalificacion.objects.select_related(
+            "usuario",
+            "calificacion",
+        ).order_by("-creado_en")
 
 
 # ============================================================

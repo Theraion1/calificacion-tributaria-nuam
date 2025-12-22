@@ -14,6 +14,7 @@ from calificaciones.api import (
     CalificacionTributariaViewSet,
     ArchivoCargaViewSet,
     HistorialArchivosViewSet,
+    HistorialCalificacionesViewSet,
 )
 from calificaciones.views import (
     RegistroCorredorView,
@@ -28,6 +29,7 @@ router.register("corredores", CorredorViewSet, basename="corredor")
 router.register("calificaciones", CalificacionTributariaViewSet, basename="calificacion-tributaria")
 router.register("jobs-carga", ArchivoCargaViewSet, basename="archivo-carga")
 router.register("historial-calificaciones", HistorialArchivosViewSet, basename="historial-calificacion")
+router.register("historial-calificaciones-globales", HistorialCalificacionesViewSet, basename="historial-calificaciones",)
 
 urlpatterns = [
     path("admin/", admin.site.urls),
