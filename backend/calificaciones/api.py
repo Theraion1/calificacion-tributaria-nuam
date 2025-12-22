@@ -291,36 +291,33 @@ class CalificacionTributariaViewSet(viewsets.ModelViewSet):
     # ----------------------------------------
     def perform_create(self, serializer):
         user = self.request.user
+        perfil = getattr(user, "perfil", None)
 
         if user.is_superuser or user.is_staff:
             calificacion = serializer.save(identificador_cliente=user.username, creado_por=user, actualizado_por=user)
         
         else:
-            perfil = getattr(user, "perfil", None)
             if not perfil or perfil.rol != "corredor":
                 raise PermissionDenied("Solo corredores pueden crear calificaciones.")
 
-        pais = serializer.validated_data.get("pais") or perfil.corredor.pais
+            pais = serializer.validated_data.get("pais") or perfil.corredor.pais
 
-        calificacion = serializer.save(
-            corredor=perfil.corredor,
-            pais=pais,
-            identificador_cliente=user.username,
-            creado_por=user,
-            actualizado_por=user,)
+            calificacion = serializer.save(
+                corredor=perfil.corredor,
+                pais=pais,
+                identificador_cliente=user.username,
+                creado_por=user,
+                actualizado_por=user,)
 
         HistorialCalificacion.objects.create(
             calificacion=calificacion,
             usuario=user,
             accion="creacion",
-            descripcion_cambio="Creación manual de calificación",
-            datos_nuevos=model_to_dict(calificacion),)
+            descripcion_cambio="Creación manual de calificación",)
 
     def perform_update(self, serializer):
         user = self.request.user
         instancia = self.get_object()
-
-        datos_previos = model_to_dict(instancia)
 
         calificacion = serializer.save(actualizado_por=user)
 
@@ -328,9 +325,7 @@ class CalificacionTributariaViewSet(viewsets.ModelViewSet):
             calificacion=calificacion,
             usuario=user,
             accion="edicion",
-            descripcion_cambio="Edición manual de calificación",
-            datos_previos=datos_previos,
-            datos_nuevos=model_to_dict(calificacion),)
+            descripcion_cambio="Edición manual de calificación",)
 
     # ----------------------------------------
     # APROBAR
