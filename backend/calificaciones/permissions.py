@@ -1,5 +1,4 @@
-from rest_framework.permissions import BasePermission
-from rest_framework import permissions
+from rest_framework.permissions import BasePermission, SAFE_METHODS
 
 class IsAdminOrAuditor(BasePermission):
     """
