@@ -63,9 +63,19 @@ class ArchivoCargaSerializer(serializers.ModelSerializer):
 
 
 class HistorialCalificacionSerializer(serializers.ModelSerializer):
+    usuario = serializers.CharField(
+        source="usuario.username",
+        read_only=True)
+
     class Meta:
         model = HistorialCalificacion
-        fields = "__all__"
+        fields = (
+            "id",
+            "creado_en",
+            "usuario",
+            "accion",
+            "descripcion_cambio",
+        )
 
 class HistorialPagination(PageNumberPagination):
     page_size = 10                 
