@@ -299,7 +299,6 @@ class CalificacionTributariaViewSet(viewsets.ModelViewSet):
             raise PermissionDenied("Solo corredores pueden crear calificaciones.")
 
         pais = serializer.validated_data.get("pais") or perfil.corredor.pais
-        
             serializer.save(
                 corredor=perfil.corredor,
                 pais=pais,
