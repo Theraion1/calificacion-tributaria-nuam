@@ -13,6 +13,8 @@ from django.forms.models import model_to_dict
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.http import HttpResponse
 
+from .permissions import CalificacionPermission
+
 from .models import (
     Pais,
     Corredor,
@@ -291,25 +293,44 @@ class CalificacionTributariaViewSet(viewsets.ModelViewSet):
         user = self.request.user
 
         if user.is_superuser or user.is_staff:
-            serializer.save(identificador_cliente=user.username, creado_por=user, actualizado_por=user)
-            return
-
-        perfil = getattr(user, "perfil", None)
-        if not perfil or perfil.rol != "corredor":
-            raise PermissionDenied("Solo corredores pueden crear calificaciones.")
+            calificacion = serializer.save(identificador_cliente=user.username, creado_por=user, actualizado_por=user)
+        
+        else:
+            perfil = getattr(user, "perfil", None)
+            if not perfil or perfil.rol != "corredor":
+                raise PermissionDenied("Solo corredores pueden crear calificaciones.")
 
         pais = serializer.validated_data.get("pais") or perfil.corredor.pais
 
-        serializer.save(
+        calificacion = serializer.save(
             corredor=perfil.corredor,
             pais=pais,
             identificador_cliente=user.username,
             creado_por=user,
             actualizado_por=user,)
 
+        HistorialCalificacion.objects.create(
+            calificacion=calificacion,
+            usuario=user,
+            accion="creacion",
+            descripcion_cambio="Creación manual de calificación",
+            datos_nuevos=model_to_dict(calificacion),)
+
     def perform_update(self, serializer):
         user = self.request.user
-        serializer.save(actualizado_por=user)
+        instancia = self.get_object()
+
+        datos_previos = model_to_dict(instancia)
+
+        calificacion = serializer.save(actualizado_por=user)
+
+        HistorialCalificacion.objects.create(
+            calificacion=calificacion,
+            usuario=user,
+            accion="edicion",
+            descripcion_cambio="Edición manual de calificación",
+            datos_previos=datos_previos,
+            datos_nuevos=model_to_dict(calificacion),)
 
     # ----------------------------------------
     # APROBAR
@@ -352,12 +373,6 @@ class CalificacionTributariaViewSet(viewsets.ModelViewSet):
             ],
         )
 
-        if request.data.get("ejercicio"):
-            data["ejercicio"] = request.data["ejercicio"]
-
-        if request.data.get("mercado"):
-            data["mercado"] = request.data["mercado"]
-
         data["estado"] = "pendiente"
         data["creado_por"] = user
         data["actualizado_por"] = user
@@ -380,6 +395,7 @@ class CalificacionTributariaViewSet(viewsets.ModelViewSet):
     def historial(self, request, pk=None):
         eventos = self.get_object().historial.select_related("usuario")
         return Response(HistorialCalificacionSerializer(eventos, many=True).data)
+
     @action(detail=False, methods=["post"], url_path="eliminar-masivo")
     def eliminar_masivo(self, request):
         """
@@ -401,14 +417,19 @@ class CalificacionTributariaViewSet(viewsets.ModelViewSet):
                 return Response({"detail": "No autorizado."}, status=403)
 
             qs = qs.filter(corredor=perfil.corredor)
+        
+        for cal in qs:
+            HistorialCalificacion.objects.create(
+                calificacion=cal,
+                usuario=user,
+                accion="eliminacion",
+                descripcion_cambio="Eliminación manual de calificación",
+                datos_previos=model_to_dict(cal),)
 
         eliminados = qs.count()
         qs.delete()
 
-        return Response(
-            {"eliminados": eliminados, "ids": ids},
-            status=200
-        )
+        return Response({"eliminados": eliminados, "ids": ids}, status=200)
 
 
 
