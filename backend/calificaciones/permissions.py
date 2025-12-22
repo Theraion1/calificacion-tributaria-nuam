@@ -17,13 +17,6 @@ class IsAdminOrAuditor(BasePermission):
         return perfil.rol in ["admin", "auditor"]
 
 class CalificacionPermission(BasePermission):
-     """
-    Permisos para CalificacionTributaria
-
-    - Admin / staff: acceso total
-    - Corredor: puede ver, crear y editar SOLO sus calificaciones
-    - Auditor: solo lectura
-    """
     def has_permission(self, request, view):
         user = request.user
         if not user or not user.is_authenticated:
