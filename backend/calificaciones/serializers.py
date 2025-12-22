@@ -48,10 +48,9 @@ class CalificacionTributariaSerializer(serializers.ModelSerializer):
         request = self.context.get("request")
         perfil = getattr(request.user, "perfil", None) if request else None
         corredor = getattr(perfil, "corredor", None)
-
-        print("FECHA_PAGO EN VALIDATED_DATA:", validated_data.get("fecha_pago"))
+        pais = validated_data.get("pais", None)
         
-        if not validated_data.get("pais") and corredor and corredor.pais:
+        if pais in (None, "") and corredor and corredor.pais:
             validated_data["pais"] = corredor.pais
 
         return super().create(validated_data)

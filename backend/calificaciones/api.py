@@ -292,12 +292,19 @@ class CalificacionTributariaViewSet(viewsets.ModelViewSet):
 
         if user.is_superuser or user.is_staff:
             serializer.save(identificador_cliente=user.username, creado_por=user, actualizado_por=user)
-        else:
-            perfil = getattr(user, "perfil", None)
-            if not perfil or perfil.rol != "corredor":
-                raise PermissionDenied("Solo corredores pueden crear calificaciones.")
+            return
+
+        perfil = getattr(user, "perfil", None)
+        if not perfil or perfil.rol != "corredor":
+            raise PermissionDenied("Solo corredores pueden crear calificaciones.")
+
+        pais = serializer.validated_data.get("pais")
+        if pais in (None, ""):
+            pais = perfil.corredor.pais
+
             serializer.save(
                 corredor=perfil.corredor,
+                pais=pais,
                 identificador_cliente=user.username,
                 creado_por=user,
                 actualizado_por=user,
